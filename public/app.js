@@ -206,7 +206,7 @@ async function renderOverview() {
       { icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>', value: formatNumber(summary.buyers), label: 'Compradores', change: summary.buyers_change_pct, color: 'teal' },
       { icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>', value: formatNumber(summary.receipts), label: 'Recibos', change: summary.receipts_change_pct, color: 'violet' },
       { icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>', value: formatCurrency(summary.aov), label: 'Ticket Promedio', change: null, color: 'cyan' },
-      { icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>', value: (summary.frequency || 0).toFixed(1) + 'x', label: 'Frecuencia', change: null, color: 'rose' },
+      { icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>', value: formatNumber(Number(summary.frequency || 0).toFixed(1)) + 'x', label: 'Frecuencia', change: null, color: 'rose' },
       { icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/></svg>', value: summary.active_days || '0', label: 'Días Activos', change: null, color: 'emerald' }
     ];
 
