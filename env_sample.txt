@@ -1,0 +1,13 @@
+# =============================================================================
+# RADIANCE SPRINT 1 - ENVIRONMENT VARIABLES
+# Copy this file to .env and fill in your values
+# =============================================================================
+
+# PostgreSQL connection string
+DATABASE_URL=postgresql://user:password@localhost:5432/radiance
+
+# Server port
+PORT=3000
+
+# Environment (development/production)
+NODE_ENV=development

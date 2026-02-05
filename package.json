@@ -1,11 +1,11 @@
 {
-  "name": "radiance-dashboard",
-  "version": "2.1.0",
-  "description": "LÜM Radiance Analytics Dashboard",
+  "name": "radiance-sprint1-capture",
+  "version": "1.0.0",
+  "description": "Radiance Sprint 1 - Commerce Capture (SoW) Explorer API",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node --watch server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -15,5 +15,8 @@
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "keywords": ["radiance", "sow", "share-of-wallet", "retail-analytics"],
+  "author": "LÜM",
+  "license": "PROPRIETARY"
 }
