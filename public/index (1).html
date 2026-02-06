@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LÜM Radiance | Dashboard</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -17,30 +17,30 @@
     </div>
     
     <nav class="sidebar-nav">
-      <a href="#" class="nav-item active" data-module="overview">
+      <button type="button" class="nav-item active" data-module="overview">
         <span class="nav-icon">📊</span>
         <span class="nav-label">Overview</span>
-      </a>
-      <a href="#" class="nav-item" data-module="capture">
+      </button>
+      <button type="button" class="nav-item" data-module="capture">
         <span class="nav-icon">🎯</span>
         <span class="nav-label">Commerce Capture</span>
-      </a>
-      <a href="#" class="nav-item" data-module="switching">
+      </button>
+      <button type="button" class="nav-item" data-module="switching">
         <span class="nav-icon">🔄</span>
         <span class="nav-label">Switching</span>
-      </a>
-      <a href="#" class="nav-item" data-module="leakage">
+      </button>
+      <button type="button" class="nav-item" data-module="leakage">
         <span class="nav-icon">🌊</span>
         <span class="nav-label">Leakage</span>
-      </a>
-      <a href="#" class="nav-item" data-module="basket">
+      </button>
+      <button type="button" class="nav-item" data-module="basket">
         <span class="nav-icon">🛒</span>
         <span class="nav-label">Basket</span>
-      </a>
-      <a href="#" class="nav-item" data-module="loyalty">
+      </button>
+      <button type="button" class="nav-item" data-module="loyalty">
         <span class="nav-icon">💎</span>
         <span class="nav-label">Loyalty</span>
-      </a>
+      </button>
     </nav>
     
     <div class="sidebar-footer">
@@ -76,7 +76,7 @@
       <div class="filter-group">
         <label>Reconcile</label>
         <select id="filterReconcile">
-          <option value="">All</option>
+          <option value="all">All</option>
           <option value="true">True</option>
           <option value="false">False</option>
         </select>
@@ -85,8 +85,20 @@
         <label>K-Threshold</label>
         <input type="number" id="filterKThreshold" value="5" min="1" max="100">
       </div>
-      <button id="btnApplyFilters" class="btn-primary">Aplicar</button>
+      <button type="button" id="btnApplyFilters" class="btn-primary">Aplicar</button>
+      <button type="button" id="btnResetFilters" class="btn-secondary">Reset</button>
+      <button type="button" id="btnExportDeck" class="btn-secondary">Export Deck</button>
     </header>
+
+    <!-- FILTER STATUS STRIP -->
+    <div class="filter-status" id="filterStatus">
+      <span class="status-chip"><span class="status-label">Panel:</span> Observed</span>
+      <span class="status-chip"><span class="status-label">K-threshold:</span> <span id="statusKThreshold">5</span></span>
+      <span class="status-chip"><span class="status-label">Reconcile:</span> <span id="statusReconcile">All</span></span>
+    </div>
+
+    <!-- GLOBAL BANNER -->
+    <div id="globalBanner" class="global-banner hidden"></div>
 
     <!-- MODULE: OVERVIEW -->
     <section class="module" id="moduleOverview">
@@ -314,12 +326,12 @@
       </div>
 
       <div class="buckets-legend">
-        <div class="bucket-item"><span class="bucket-color" style="background:#10b981"></span> RETAINED: Mantiene spend ≥90%</div>
-        <div class="bucket-item"><span class="bucket-color" style="background:#f59e0b"></span> CATEGORY_GONE: Dejó la categoría</div>
-        <div class="bucket-item"><span class="bucket-color" style="background:#f97316"></span> REDUCED_BASKET: Spend &lt;50%</div>
-        <div class="bucket-item"><span class="bucket-color" style="background:#fb923c"></span> REDUCED_FREQ: Menos visitas</div>
-        <div class="bucket-item"><span class="bucket-color" style="background:#ef4444"></span> DELAYED_ONLY: Solo retraso</div>
-        <div class="bucket-item"><span class="bucket-color" style="background:#64748b"></span> FULL_CHURN: Sin actividad</div>
+        <div class="bucket-item"><span class="bucket-color c-green"></span> RETAINED: Mantiene spend ≥90%</div>
+        <div class="bucket-item"><span class="bucket-color c-yellow"></span> CATEGORY_GONE: Dejó la categoría</div>
+        <div class="bucket-item"><span class="bucket-color c-orange"></span> REDUCED_BASKET: Spend &lt;50%</div>
+        <div class="bucket-item"><span class="bucket-color c-orange"></span> REDUCED_FREQ: Menos visitas</div>
+        <div class="bucket-item"><span class="bucket-color c-red"></span> DELAYED_ONLY: Solo retraso</div>
+        <div class="bucket-item"><span class="bucket-color c-gray"></span> FULL_CHURN: Sin actividad</div>
       </div>
     </section>
 

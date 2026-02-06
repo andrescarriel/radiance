@@ -58,14 +58,17 @@ const formatDelta = (current, previous) => {
 };
 
 // Get filter values
-const getFilters = () => ({
-  issuer_ruc: $('#filterIssuerRuc').value.trim(),
-  start: $('#filterStart').value,
-  end: $('#filterEnd').value,
-  category_level: $('#filterCategoryLevel').value,
-  reconcile_ok: $('#filterReconcile').value,
-  k_threshold: $('#filterKThreshold').value
-});
+const getFilters = () => {
+  const reconcile = $('#filterReconcile').value;
+  return {
+    issuer_ruc: $('#filterIssuerRuc').value.trim(),
+    start: $('#filterStart').value,
+    end: $('#filterEnd').value,
+    category_level: $('#filterCategoryLevel').value,
+    reconcile_ok: reconcile === 'all' ? '' : reconcile,  // 'all' -> empty (backend treats as NULL)
+    k_threshold: $('#filterKThreshold').value
+  };
+};
 
 // Build query string
 const buildQuery = (filters) => {
@@ -105,8 +108,15 @@ const showToast = (message, type = 'error') => {
 };
 
 // Loading state
-const showLoading = () => $('#loadingOverlay').classList.remove('hidden');
-const hideLoading = () => $('#loadingOverlay').classList.add('hidden');
+const showLoading = () => {
+  $('#loadingOverlay').classList.remove('hidden');
+  $('#btnApplyFilters').disabled = true;
+};
+
+const hideLoading = () => {
+  $('#loadingOverlay').classList.add('hidden');
+  $('#btnApplyFilters').disabled = false;
+};
 
 // Destroy chart if exists
 const destroyChart = (id) => {
@@ -118,10 +128,14 @@ const destroyChart = (id) => {
 
 // Create empty state
 const showEmptyState = (container, message = 'Sin datos para mostrar') => {
+  // Check if inside chart-body (use chart-empty) or elsewhere (use empty-state)
+  const isChartBody = container.classList.contains('chart-body');
+  const className = isChartBody ? 'chart-empty' : 'empty-state';
+  
   container.innerHTML = `
-    <div class="empty-state">
-      <div class="empty-state-icon">📭</div>
-      <div class="empty-state-text">${message}</div>
+    <div class="${className}">
+      ${isChartBody ? '' : '<div class="empty-state-icon">📭</div>'}
+      <div class="${isChartBody ? '' : 'empty-state-text'}">${message}</div>
     </div>
   `;
 };
@@ -131,8 +145,7 @@ const showEmptyState = (container, message = 'Sin datos para mostrar') => {
 // -----------------------------------------------------------------------------
 const initNavigation = () => {
   $$('.nav-item').forEach(item => {
-    item.addEventListener('click', (e) => {
-      e.preventDefault();
+    item.addEventListener('click', () => {
       const module = item.dataset.module;
       
       // Update nav active state
@@ -660,7 +673,30 @@ const initEventListeners = () => {
   // Apply filters button
   $('#btnApplyFilters').addEventListener('click', () => {
     const activeModule = $('.nav-item.active')?.dataset.module || 'overview';
+    updateFilterStatus();
     loadModule(activeModule);
+  });
+  
+  // Reset filters button
+  $('#btnResetFilters').addEventListener('click', () => {
+    $('#filterIssuerRuc').value = '';
+    $('#filterStart').value = '2025-01-01';
+    $('#filterEnd').value = '2025-07-01';
+    $('#filterCategoryLevel').value = 'l1';
+    $('#filterReconcile').value = 'all';
+    $('#filterKThreshold').value = '5';
+    updateFilterStatus();
+  });
+  
+  // Export Deck button
+  $('#btnExportDeck').addEventListener('click', () => {
+    const filters = getFilters();
+    if (!filters.issuer_ruc) {
+      showToast('Ingresa un issuer_ruc', 'error');
+      return;
+    }
+    const params = buildQuery(filters);
+    window.open(`/api/deck/commerce?${params}`, '_blank');
   });
   
   // Leakage category change
@@ -697,6 +733,24 @@ const initEventListeners = () => {
       if (e.key === 'Enter') $('#btnApplyFilters').click();
     });
   });
+};
+
+// Update filter status strip
+const updateFilterStatus = () => {
+  const reconcile = $('#filterReconcile').value;
+  $('#statusKThreshold').textContent = $('#filterKThreshold').value || '5';
+  $('#statusReconcile').textContent = reconcile === 'all' ? 'All' : reconcile;
+};
+
+// Show/hide global banner
+const showBanner = (message, type = 'error') => {
+  const banner = $('#globalBanner');
+  banner.textContent = message;
+  banner.className = `global-banner ${type === 'warning' ? 'warning' : ''}`;
+};
+
+const hideBanner = () => {
+  $('#globalBanner').classList.add('hidden');
 };
 
 // -----------------------------------------------------------------------------
