@@ -53,9 +53,11 @@
     <!-- GLOBAL FILTERS -->
     <header class="filters-bar">
       <div class="filter-group">
-        <label>Retailer</label>
-        <input type="text" id="filterIssuerRuc" placeholder="issuer_ruc" value="">
-      </div>
+  <label>Retailer</label>
+  <select id="filterIssuerRuc">
+    <option value="">Cargando...</option>
+  </select>
+</div>
       <div class="filter-group">
         <label>Desde</label>
         <input type="date" id="filterStart" value="2025-01-01">
@@ -115,10 +117,9 @@
           <div class="kpi-delta" id="kpiVentasDelta"></div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">Transacciones</div>
-          <div class="kpi-value" id="kpiTxn">—</div>
-          <div class="kpi-delta" id="kpiTxnDelta"></div>
-        </div>
+  <div class="kpi-label">Meses Activos</div>
+  <div class="kpi-value" id="kpiMeses">—</div>
+</div>
         <div class="kpi-card">
           <div class="kpi-label">Clientes Únicos</div>
           <div class="kpi-value" id="kpiClientes">—</div>
