@@ -734,27 +734,75 @@ app.get('/api/retailers', asyncHandler(async (req, res) => {
   });
 }));
 // =============================================================================
-// CATEGORIES LIST
+// CATEGORIES LIST (Products + Commerce)
 // =============================================================================
 app.get('/api/categories', asyncHandler(async (req, res) => {
   const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
-  const catCol = VALID_CAT_COLS[categoryLevel] || 'category_l1';
+  const type = req.query.type || 'all'; // 'product', 'commerce', 'all'
   
-  const query = `
-    SELECT DISTINCT COALESCE(b.${catCol}, 'UNKNOWN') AS category_value,
-      COUNT(DISTINCT b.user_id) AS users,
-      SUM(COALESCE(b.line_total, 0)) AS spend
-    FROM analytics.radiance_base_v1 b
-    WHERE b.${catCol} IS NOT NULL AND b.${catCol} != 'UNKNOWN'
-    GROUP BY COALESCE(b.${catCol}, 'UNKNOWN')
-    HAVING COUNT(DISTINCT b.user_id) >= 1
-    ORDER BY spend DESC
-    LIMIT 100
-  `;
+  const productCol = VALID_CAT_COLS[categoryLevel] || 'category_l1';
+  const commerceCol = `commerce_${categoryLevel}`; // commerce_l1, commerce_l2, etc.
+  
+  let query;
+  
+  if (type === 'product') {
+    query = `
+      SELECT DISTINCT COALESCE(b.${productCol}, 'UNKNOWN') AS category_value,
+        'product' AS category_type,
+        COUNT(DISTINCT b.user_id) AS users,
+        SUM(COALESCE(b.line_total, 0)) AS spend
+      FROM analytics.radiance_base_v1 b
+      WHERE b.${productCol} IS NOT NULL AND b.${productCol} != 'UNKNOWN'
+      GROUP BY 1
+      HAVING COUNT(DISTINCT b.user_id) >= 1
+      ORDER BY spend DESC
+      LIMIT 100
+    `;
+  } else if (type === 'commerce') {
+    query = `
+      SELECT DISTINCT COALESCE(b.${commerceCol}, 'UNKNOWN') AS category_value,
+        'commerce' AS category_type,
+        COUNT(DISTINCT b.user_id) AS users,
+        SUM(COALESCE(b.line_total, 0)) AS spend
+      FROM analytics.radiance_base_v1 b
+      WHERE b.${commerceCol} IS NOT NULL AND b.${commerceCol} != 'UNKNOWN'
+      GROUP BY 1
+      HAVING COUNT(DISTINCT b.user_id) >= 1
+      ORDER BY spend DESC
+      LIMIT 100
+    `;
+  } else {
+    // Both
+    query = `
+      (SELECT DISTINCT COALESCE(b.${productCol}, 'UNKNOWN') AS category_value,
+        'product' AS category_type,
+        COUNT(DISTINCT b.user_id) AS users,
+        SUM(COALESCE(b.line_total, 0)) AS spend
+      FROM analytics.radiance_base_v1 b
+      WHERE b.${productCol} IS NOT NULL AND b.${productCol} != 'UNKNOWN'
+      GROUP BY 1
+      HAVING COUNT(DISTINCT b.user_id) >= 1
+      ORDER BY spend DESC
+      LIMIT 50)
+      UNION ALL
+      (SELECT DISTINCT COALESCE(b.${commerceCol}, 'UNKNOWN') AS category_value,
+        'commerce' AS category_type,
+        COUNT(DISTINCT b.user_id) AS users,
+        SUM(COALESCE(b.line_total, 0)) AS spend
+      FROM analytics.radiance_base_v1 b
+      WHERE b.${commerceCol} IS NOT NULL AND b.${commerceCol} != 'UNKNOWN'
+      GROUP BY 1
+      HAVING COUNT(DISTINCT b.user_id) >= 1
+      ORDER BY spend DESC
+      LIMIT 50)
+    `;
+  }
+  
   const { rows } = await pool.query(query);
   res.json({
     data: rows.map(r => ({
       category_value: r.category_value,
+      category_type: r.category_type,
       users: Number(r.users),
       spend: Number(r.spend)
     }))
@@ -796,7 +844,7 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
         b.cufe,
         b.invoice_date,
         COALESCE(b.${catCol}, 'UNKNOWN') AS category,
-        COALESCE(b.line_total, 0) AS line_total
+        SUM(COALESCE(b.line_total, 0)) AS line_total
       FROM analytics.radiance_base_v1 b
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
@@ -831,7 +879,7 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
   // Previous period KPIs
   const prevKpisQuery = `
     WITH base AS (
-      SELECT b.user_id, b.cufe, COALESCE(b.line_total, 0) AS line_total
+      SELECT b.user_id, b.cufe, SUM(COALESCE(b.line_total, 0)) AS line_total
       FROM analytics.radiance_base_v1 b
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
@@ -1093,7 +1141,7 @@ app.get('/api/leakage/tree', asyncHandler(async (req, res) => {
   const query = `
     WITH base_txn AS (
       SELECT b.user_id, DATE_TRUNC('month', b.invoice_date)::date AS txn_month, b.issuer_ruc,
-        COALESCE(b.line_total, 0) AS line_total, COUNT(DISTINCT b.cufe) AS visits
+        SUM(COALESCE(b.line_total, 0))AS line_total, COUNT(DISTINCT b.cufe) AS visits
       FROM analytics.radiance_base_v1 b
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
@@ -1317,7 +1365,7 @@ app.get('/api/panel/summary', asyncHandler(async (req, res) => {
   const start = Date.now();
   const query = `
     WITH base_txn AS (
-      SELECT b.user_id, b.cufe, b.invoice_date, b.issuer_ruc, COALESCE(b.line_total, 0) AS line_total
+      SELECT b.user_id, b.cufe, b.invoice_date, b.issuer_ruc, SUM(COALESCE(b.line_total, 0))AS line_total
       FROM analytics.radiance_base_v1 b
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
@@ -1485,7 +1533,7 @@ app.get('/api/deck/commerce', asyncHandler(async (req, res) => {
   // PANEL SUMMARY
   const panelQuery = `
     WITH base_txn AS (
-      SELECT b.user_id, b.cufe, b.invoice_date, b.issuer_ruc, COALESCE(b.line_total, 0) AS line_total
+      SELECT b.user_id, b.cufe, b.invoice_date, b.issuer_ruc, SUM(COALESCE(b.line_total, 0))AS line_total
       FROM analytics.radiance_base_v1 b
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
@@ -1518,7 +1566,7 @@ app.get('/api/deck/commerce', asyncHandler(async (req, res) => {
   // PANEL TREND
   const trendQuery = `
     WITH base_txn AS (
-      SELECT b.user_id, DATE_TRUNC('month', b.invoice_date)::date AS month, COALESCE(b.line_total, 0) AS spend
+      SELECT b.user_id, DATE_TRUNC('month', b.invoice_date)::date AS month, SUM(COALESCE(b.line_total, 0))AS spend
       FROM analytics.radiance_base_v1 b
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
@@ -1589,7 +1637,7 @@ app.get('/api/deck/commerce', asyncHandler(async (req, res) => {
     const leakageQuery = `
       WITH base_txn AS (
         SELECT b.user_id, DATE_TRUNC('month', b.invoice_date)::date AS txn_month, b.issuer_ruc,
-          COALESCE(b.line_total, 0) AS line_total, COUNT(DISTINCT b.cufe) AS visits
+          SUM(COALESCE(b.line_total, 0))AS line_total, COUNT(DISTINCT b.cufe) AS visits
         FROM analytics.radiance_base_v1 b
         LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
         WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
