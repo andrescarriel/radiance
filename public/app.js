@@ -774,6 +774,29 @@ const loadRetailers = async () => {
   }
 };
 
+// -----------------------------------------------------------------------------
+// LOAD CATEGORIES
+// -----------------------------------------------------------------------------
+const loadCategories = async () => {
+  const level = $('#filterCategoryLevel').value;
+  try {
+    const res = await fetch(`/api/categories?category_level=${level}`);
+    const data = await res.json();
+    const select = $('#filterCategoryValue');
+    select.innerHTML = '<option value="">Todas</option>';
+    data.data.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.category_value;
+      opt.textContent = `${c.category_value} (${c.users.toLocaleString()})`;
+      select.appendChild(opt);
+    });
+  } catch (e) {
+    console.error('Error loading categories:', e);
+  }
+};
+
+// Recargar categorías cuando cambia el nivel
+$('#filterCategoryLevel').addEventListener('change', loadCategories);
 
 // -----------------------------------------------------------------------------
 // INIT
@@ -782,7 +805,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initNavigation();
   initEventListeners();
   loadRetailers();
-  
+loadCategories();  
   // Check for issuer_ruc and auto-load
   const params = new URLSearchParams(window.location.search);
   if (params.get('issuer_ruc')) {
