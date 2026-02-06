@@ -12,6 +12,7 @@ const { Pool } = require('pg');
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(express.static('public'));
 
 // =============================================================================
 // DATABASE CONNECTION
@@ -705,6 +706,208 @@ app.get('/api/health', asyncHandler(async (req, res) => {
 }));
 
 // =============================================================================
+// SPRINT 0: KPIs SUMMARY (Overview Dashboard)
+// =============================================================================
+app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
+  const startDate = parseDate(req.query.start);
+  const endDate = parseDate(req.query.end);
+  const issuerRuc = parseString(req.query.issuer_ruc);
+  const reconcileOk = parseBool(req.query.reconcile_ok, null); // FIX: default NULL
+  const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
+
+  const errors = [];
+  if (!startDate) errors.push('Invalid or missing start date');
+  if (!endDate) errors.push('Invalid or missing end date');
+  if (!issuerRuc) errors.push('issuer_ruc is required');
+  if (errors.length > 0) return res.status(400).json({ error: errors.join('; ') });
+
+  const catCol = VALID_CAT_COLS[categoryLevel] || 'category_l1';
+  const start = Date.now();
+
+  // Calculate previous period (same duration, immediately before)
+  const startD = new Date(startDate);
+  const endD = new Date(endDate);
+  const daysDiff = Math.round((endD - startD) / (1000 * 60 * 60 * 24));
+  const prevEnd = startDate;
+  const prevStart = new Date(startD);
+  prevStart.setDate(prevStart.getDate() - daysDiff);
+  const prevStartStr = prevStart.toISOString().split('T')[0];
+
+  // Main KPIs query
+  const kpisQuery = `
+    WITH base AS (
+      SELECT 
+        b.user_id,
+        b.cufe,
+        b.invoice_date,
+        b.product_id,
+        COALESCE(b.${catCol}, 'UNKNOWN') AS category,
+        COALESCE(b.line_total, 0) AS line_total,
+        EXTRACT(DOW FROM b.invoice_date) AS day_of_week
+      FROM analytics.radiance_base_v1 b
+      LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
+      WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
+        AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
+        AND b.issuer_ruc = $4
+        AND b.user_id IS NOT NULL
+    ),
+    kpis AS (
+      SELECT
+        SUM(line_total) AS ventas,
+        COUNT(DISTINCT cufe) AS transacciones,
+        COUNT(DISTINCT user_id) AS clientes,
+        COUNT(DISTINCT product_id) AS productos,
+        COUNT(DISTINCT category) AS categorias
+      FROM base
+    ),
+    market AS (
+      SELECT SUM(COALESCE(b.line_total, 0)) AS spend_market
+      FROM analytics.radiance_base_v1 b
+      LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
+      WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
+        AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
+        AND b.user_id IN (SELECT DISTINCT user_id FROM base)
+    )
+    SELECT 
+      k.*,
+      CASE WHEN k.transacciones > 0 THEN k.ventas / k.transacciones ELSE 0 END AS ticket_promedio,
+      CASE WHEN k.clientes > 0 THEN k.transacciones::float / k.clientes ELSE 0 END AS frecuencia,
+      CASE WHEN m.spend_market > 0 THEN 100.0 * k.ventas / m.spend_market ELSE 0 END AS sow_pct
+    FROM kpis k CROSS JOIN market m
+  `;
+
+  // Previous period KPIs
+  const prevKpisQuery = `
+    WITH base AS (
+      SELECT b.user_id, b.cufe, COALESCE(b.line_total, 0) AS line_total
+      FROM analytics.radiance_base_v1 b
+      LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
+      WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
+        AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
+        AND b.issuer_ruc = $4
+        AND b.user_id IS NOT NULL
+    )
+    SELECT
+      SUM(line_total) AS ventas,
+      COUNT(DISTINCT cufe) AS transacciones,
+      COUNT(DISTINCT user_id) AS clientes,
+      CASE WHEN COUNT(DISTINCT cufe) > 0 THEN SUM(line_total) / COUNT(DISTINCT cufe) ELSE 0 END AS ticket_promedio
+    FROM base
+  `;
+
+  // Monthly trends
+  const trendsQuery = `
+    SELECT 
+      DATE_TRUNC('month', b.invoice_date)::date AS month,
+      SUM(COALESCE(b.line_total, 0)) AS ventas,
+      COUNT(DISTINCT b.user_id) AS clientes,
+      COUNT(DISTINCT b.cufe) AS transacciones
+    FROM analytics.radiance_base_v1 b
+    LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
+    WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
+      AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
+      AND b.issuer_ruc = $4
+      AND b.user_id IS NOT NULL
+    GROUP BY DATE_TRUNC('month', b.invoice_date)
+    ORDER BY month
+  `;
+
+  // By day of week
+  const weekdayQuery = `
+    WITH base AS (
+      SELECT EXTRACT(DOW FROM b.invoice_date) AS dow, COUNT(DISTINCT b.cufe) AS txn
+      FROM analytics.radiance_base_v1 b
+      LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
+      WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
+        AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
+        AND b.issuer_ruc = $4
+        AND b.user_id IS NOT NULL
+      GROUP BY dow
+    ),
+    total AS (SELECT SUM(txn) AS total FROM base)
+    SELECT 
+      dow,
+      CASE dow 
+        WHEN 0 THEN 'Dom' WHEN 1 THEN 'Lun' WHEN 2 THEN 'Mar' 
+        WHEN 3 THEN 'Mié' WHEN 4 THEN 'Jue' WHEN 5 THEN 'Vie' WHEN 6 THEN 'Sáb' 
+      END AS day_name,
+      txn,
+      ROUND(100.0 * txn / NULLIF(total, 0), 1) AS pct
+    FROM base CROSS JOIN total
+    ORDER BY dow
+  `;
+
+  // Top categories
+  const topCatQuery = `
+    SELECT 
+      COALESCE(b.${catCol}, 'UNKNOWN') AS category,
+      SUM(COALESCE(b.line_total, 0)) AS ventas,
+      COUNT(DISTINCT b.user_id) AS clientes
+    FROM analytics.radiance_base_v1 b
+    LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
+    WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
+      AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
+      AND b.issuer_ruc = $4
+      AND b.user_id IS NOT NULL
+    GROUP BY COALESCE(b.${catCol}, 'UNKNOWN')
+    ORDER BY ventas DESC
+    LIMIT 10
+  `;
+
+  // Execute all queries
+  const [kpisResult, prevResult, trendsResult, weekdayResult, topCatResult] = await Promise.all([
+    pool.query(kpisQuery, [startDate, endDate, reconcileOk, issuerRuc]),
+    pool.query(prevKpisQuery, [prevStartStr, prevEnd, reconcileOk, issuerRuc]),
+    pool.query(trendsQuery, [startDate, endDate, reconcileOk, issuerRuc]),
+    pool.query(weekdayQuery, [startDate, endDate, reconcileOk, issuerRuc]),
+    pool.query(topCatQuery, [startDate, endDate, reconcileOk, issuerRuc])
+  ]);
+
+  const current = kpisResult.rows[0] || {};
+  const previous = prevResult.rows[0] || null;
+
+  res.set('X-Query-Time-Ms', String(Date.now() - start));
+  res.json({
+    filters: { start: startDate, end: endDate, issuer_ruc: issuerRuc, reconcile_ok: reconcileOk },
+    current: {
+      ventas: Number(current.ventas || 0),
+      transacciones: Number(current.transacciones || 0),
+      clientes: Number(current.clientes || 0),
+      ticket_promedio: Number(current.ticket_promedio || 0),
+      frecuencia: Number(current.frecuencia || 0),
+      productos: Number(current.productos || 0),
+      categorias: Number(current.categorias || 0),
+      sow_pct: Number(current.sow_pct || 0)
+    },
+    previous: previous ? {
+      ventas: Number(previous.ventas || 0),
+      transacciones: Number(previous.transacciones || 0),
+      clientes: Number(previous.clientes || 0),
+      ticket_promedio: Number(previous.ticket_promedio || 0)
+    } : null,
+    trends: trendsResult.rows.map(r => ({
+      month: r.month.toISOString().split('T')[0].substring(0, 7),
+      ventas: Number(r.ventas || 0),
+      clientes: Number(r.clientes || 0),
+      transacciones: Number(r.transacciones || 0)
+    })),
+    by_weekday: weekdayResult.rows.map(r => ({
+      dow: Number(r.dow),
+      day_name: r.day_name,
+      txn: Number(r.txn || 0),
+      pct: Number(r.pct || 0)
+    })),
+    top_categories: topCatResult.rows.map(r => ({
+      category: r.category,
+      ventas: Number(r.ventas || 0),
+      clientes: Number(r.clientes || 0)
+    }))
+  });
+}));
+
+
+
+// =============================================================================
 // SPRINT 1: CAPTURE (SoW & Leakage by Category)
 // =============================================================================
 app.get('/api/sow_leakage/by_category', asyncHandler(async (req, res) => {
@@ -712,7 +915,7 @@ app.get('/api/sow_leakage/by_category', asyncHandler(async (req, res) => {
   const endDate = parseDate(req.query.end);
   const issuerRuc = parseString(req.query.issuer_ruc);
   const storeId = parseString(req.query.store_id);
-  const reconcileOk = parseBool(req.query.reconcile_ok, true);
+  const reconcileOk = parseBool(req.query.reconcile_ok, null);
   const kThreshold = parseKThreshold(req.query.k_threshold);
   const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
 
@@ -776,7 +979,7 @@ app.get('/api/switching/destinations', asyncHandler(async (req, res) => {
   const startDate = parseDate(req.query.start);
   const endDate = parseDate(req.query.end);
   const issuerRuc = parseString(req.query.issuer_ruc);
-  const reconcileOk = parseBool(req.query.reconcile_ok, true);
+  const reconcileOk = parseBool(req.query.reconcile_ok, null);
   const kThreshold = parseKThreshold(req.query.k_threshold);
 
   const errors = [];
@@ -822,7 +1025,7 @@ app.get('/api/leakage/tree', asyncHandler(async (req, res) => {
   const endDate = parseDate(req.query.end);
   const issuerRuc = parseString(req.query.issuer_ruc);
   const categoryValue = parseString(req.query.category_value);
-  const reconcileOk = parseBool(req.query.reconcile_ok, true);
+  const reconcileOk = parseBool(req.query.reconcile_ok, null);
   const kThreshold = parseKThreshold(req.query.k_threshold);
   const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
 
@@ -904,7 +1107,7 @@ app.get('/api/basket/breadth', asyncHandler(async (req, res) => {
   const startDate = parseDate(req.query.start);
   const endDate = parseDate(req.query.end);
   const issuerRuc = parseString(req.query.issuer_ruc);
-  const reconcileOk = parseBool(req.query.reconcile_ok, true);
+  const reconcileOk = parseBool(req.query.reconcile_ok, null);
   const kThreshold = parseKThreshold(req.query.k_threshold);
   const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
 
@@ -964,7 +1167,7 @@ app.get('/api/loyalty/brands', asyncHandler(async (req, res) => {
   const endDate = parseDate(req.query.end);
   const issuerRuc = parseString(req.query.issuer_ruc);
   const categoryValue = parseString(req.query.category_value);
-  const reconcileOk = parseBool(req.query.reconcile_ok, true);
+  const reconcileOk = parseBool(req.query.reconcile_ok, null);
   const kThreshold = parseKThreshold(req.query.k_threshold);
   const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
 
@@ -1052,7 +1255,7 @@ app.get('/api/panel/summary', asyncHandler(async (req, res) => {
   const endDate = parseDate(req.query.end);
   const issuerRuc = parseString(req.query.issuer_ruc);
   const storeId = parseString(req.query.store_id);
-  const reconcileOk = parseBool(req.query.reconcile_ok, true);
+  const reconcileOk = parseBool(req.query.reconcile_ok, null);
 
   const errors = [];
   if (!startDate) errors.push('Invalid or missing start date');
@@ -1213,7 +1416,7 @@ app.get('/api/deck/commerce', asyncHandler(async (req, res) => {
   const endDate = parseDate(req.query.end);
   const issuerRuc = parseString(req.query.issuer_ruc);
   const storeId = parseString(req.query.store_id);
-  const reconcileOk = parseBool(req.query.reconcile_ok, true);
+  const reconcileOk = parseBool(req.query.reconcile_ok, null);
   const kThreshold = parseKThreshold(req.query.k_threshold);
   const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
   const format = req.query.format || 'html';
