@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LÜM Radiance | Dashboard</title>
-  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script defer src="app.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -53,7 +54,7 @@
     <!-- GLOBAL FILTERS -->
     <header class="filters-bar">
       <div class="filter-group">
-  <label>Comercio</label>
+  <label>Retailer</label>
   <select id="filterIssuerRuc">
     <option value="">Cargando...</option>
   </select>
@@ -64,7 +65,7 @@
       </div>
       <div class="filter-group">
         <label>Hasta</label>
-        <input type="date" id="filterEnd" value="2025-12-01">
+        <input type="date" id="filterEnd" value="2025-07-01">
       </div>
       <div class="filter-group">
         <label>Categoría</label>
