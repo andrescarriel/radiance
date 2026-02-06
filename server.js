@@ -811,6 +811,97 @@ app.get('/api/categories', asyncHandler(async (req, res) => {
     }))
   });
 }));
+
+
+// =============================================================================
+// CATEGORIES CHILDREN (Hierarchical Dependent Filters)
+// =============================================================================
+app.get('/api/categories/children', asyncHandler(async (req, res) => {
+  const startDate = parseDate(req.query.start);
+  const endDate = parseDate(req.query.end);
+  const issuerRuc = parseString(req.query.issuer_ruc);
+  const reconcileOk = parseBool(req.query.reconcile_ok, null);
+  const level = (req.query.level || 'l2').toLowerCase(); // Target level to fetch
+  
+  // Parent path filters
+  const parentL1 = parseString(req.query.parent_l1);
+  const parentL2 = parseString(req.query.parent_l2);
+  const parentL3 = parseString(req.query.parent_l3);
+
+  const errors = [];
+  if (!startDate) errors.push('Invalid or missing start date');
+  if (!endDate) errors.push('Invalid or missing end date');
+  if (!['l1', 'l2', 'l3', 'l4'].includes(level)) errors.push('Invalid level');
+  if (errors.length > 0) return res.status(400).json({ error: errors.join('; ') });
+
+  const targetCol = VALID_CAT_COLS[level];
+  
+  // Build parent filters dynamically
+  let parentFilters = '';
+  const params = [startDate, endDate, reconcileOk];
+  let paramIndex = 4;
+
+  if (parentL1) {
+    parentFilters += ` AND b.category_l1 = $${paramIndex}`;
+    params.push(parentL1);
+    paramIndex++;
+  }
+  if (parentL2) {
+    parentFilters += ` AND b.category_l2 = $${paramIndex}`;
+    params.push(parentL2);
+    paramIndex++;
+  }
+  if (parentL3) {
+    parentFilters += ` AND b.category_l3 = $${paramIndex}`;
+    params.push(parentL3);
+    paramIndex++;
+  }
+
+  // Optional issuer filter (for retailer-specific categories)
+  let issuerFilter = '';
+  if (issuerRuc) {
+    issuerFilter = ` AND b.issuer_ruc = $${paramIndex}`;
+    params.push(issuerRuc);
+    paramIndex++;
+  }
+
+  const query = `
+    SELECT 
+      COALESCE(b.${targetCol}, 'UNKNOWN') AS category_value,
+      COUNT(DISTINCT b.user_id) AS users,
+      SUM(COALESCE(b.line_total, 0)) AS spend
+    FROM analytics.radiance_base_v1 b
+    LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
+    WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
+      AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
+      AND b.${targetCol} IS NOT NULL 
+      AND b.${targetCol} != 'UNKNOWN'
+      ${parentFilters}
+      ${issuerFilter}
+    GROUP BY COALESCE(b.${targetCol}, 'UNKNOWN')
+    HAVING COUNT(DISTINCT b.user_id) >= 1
+    ORDER BY spend DESC
+    LIMIT 100
+  `;
+
+  const { rows } = await pool.query(query, params);
+  
+  res.json({
+    filters: { 
+      start: startDate, 
+      end: endDate, 
+      level,
+      parent_path: { l1: parentL1, l2: parentL2, l3: parentL3 }
+    },
+    data: rows.map(r => ({
+      category_value: r.category_value,
+      users: Number(r.users),
+      spend: Number(r.spend)
+    }))
+  });
+}));
+
+
 // =============================================================================
 // SPRINT 0: KPIs SUMMARY (Overview Dashboard)
 // =============================================================================
@@ -818,9 +909,15 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
   const startDate = parseDate(req.query.start);
   const endDate = parseDate(req.query.end);
   const issuerRuc = parseString(req.query.issuer_ruc);
-  const reconcileOk = parseBool(req.query.reconcile_ok, null); // FIX: default NULL
+  const reconcileOk = parseBool(req.query.reconcile_ok, null);
   const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
   const peerScope = (req.query.peer_scope || 'all').toLowerCase();
+  
+  // Category path filters (hierarchical)
+  const categoryPathL1 = parseString(req.query.category_l1);
+  const categoryPathL2 = parseString(req.query.category_l2);
+  const categoryPathL3 = parseString(req.query.category_l3);
+  const categoryPathL4 = parseString(req.query.category_l4);
 
   const errors = [];
   if (!startDate) errors.push('Invalid or missing start date');
@@ -840,6 +937,14 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
   prevStart.setDate(prevStart.getDate() - daysDiff);
   const prevStartStr = prevStart.toISOString().split('T')[0];
 
+// Build category path filter
+  const categoryPathFilter = `
+    AND ($5::text IS NULL OR b.category_l1 = $5)
+    AND ($6::text IS NULL OR b.category_l2 = $6)
+    AND ($7::text IS NULL OR b.category_l3 = $7)
+    AND ($8::text IS NULL OR b.category_l4 = $8)
+  `;
+
   // Main KPIs query
   const kpisQuery = `
     WITH base AS (
@@ -855,6 +960,7 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
         AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
         AND b.issuer_ruc = $4
         AND b.user_id IS NOT NULL
+        ${categoryPathFilter}
       GROUP BY b.user_id, b.cufe, b.invoice_date, COALESCE(b.${catCol}, 'UNKNOWN')
     ),
     kpis AS (
@@ -872,6 +978,7 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
         AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
         AND b.user_id IN (SELECT DISTINCT user_id FROM base)
+        ${categoryPathFilter}
     )
     SELECT 
       k.*,
@@ -882,7 +989,7 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
   `;
 
   // Previous period KPIs
-  const prevKpisQuery = `
+const prevKpisQuery = `
     WITH base AS (
       SELECT b.user_id, b.cufe, SUM(COALESCE(b.line_total, 0)) AS line_total
       FROM analytics.radiance_base_v1 b
@@ -891,7 +998,11 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
         AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
         AND b.issuer_ruc = $4
         AND b.user_id IS NOT NULL
-		GROUP BY b.user_id, b.cufe
+        AND ($5::text IS NULL OR b.category_l1 = $5)
+        AND ($6::text IS NULL OR b.category_l2 = $6)
+        AND ($7::text IS NULL OR b.category_l3 = $7)
+        AND ($8::text IS NULL OR b.category_l4 = $8)
+      GROUP BY b.user_id, b.cufe
     )
     SELECT
       SUM(line_total) AS ventas,
@@ -914,12 +1025,16 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
       AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
       AND b.issuer_ruc = $4
       AND b.user_id IS NOT NULL
+      AND ($5::text IS NULL OR b.category_l1 = $5)
+      AND ($6::text IS NULL OR b.category_l2 = $6)
+      AND ($7::text IS NULL OR b.category_l3 = $7)
+      AND ($8::text IS NULL OR b.category_l4 = $8)
     GROUP BY DATE_TRUNC('month', b.invoice_date)
     ORDER BY month
   `;
 
   // By day of week
-  const weekdayQuery = `
+const weekdayQuery = `
     WITH base AS (
       SELECT EXTRACT(DOW FROM b.invoice_date) AS dow, COUNT(DISTINCT b.cufe) AS txn
       FROM analytics.radiance_base_v1 b
@@ -928,6 +1043,10 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
         AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
         AND b.issuer_ruc = $4
         AND b.user_id IS NOT NULL
+        AND ($5::text IS NULL OR b.category_l1 = $5)
+        AND ($6::text IS NULL OR b.category_l2 = $6)
+        AND ($7::text IS NULL OR b.category_l3 = $7)
+        AND ($8::text IS NULL OR b.category_l4 = $8)
       GROUP BY dow
     ),
     total AS (SELECT SUM(txn) AS total FROM base)
@@ -944,9 +1063,16 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
   `;
 
   // Top categories
+// Determine next level for drill-down
+  let drillDownLevel = catCol;
+  if (categoryPathL1 && !categoryPathL2) drillDownLevel = 'category_l2';
+  else if (categoryPathL2 && !categoryPathL3) drillDownLevel = 'category_l3';
+  else if (categoryPathL3 && !categoryPathL4) drillDownLevel = 'category_l4';
+  else if (categoryPathL4) drillDownLevel = 'category_l4'; // Stay at L4, could show brands later
+
   const topCatQuery = `
     SELECT 
-      COALESCE(b.${catCol}, 'UNKNOWN') AS category,
+      COALESCE(b.${drillDownLevel}, 'UNKNOWN') AS category,
       SUM(COALESCE(b.line_total, 0)) AS ventas,
       COUNT(DISTINCT b.user_id) AS clientes
     FROM analytics.radiance_base_v1 b
@@ -955,26 +1081,38 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
       AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
       AND b.issuer_ruc = $4
       AND b.user_id IS NOT NULL
-    GROUP BY COALESCE(b.${catCol}, 'UNKNOWN')
+      AND ($5::text IS NULL OR b.category_l1 = $5)
+      AND ($6::text IS NULL OR b.category_l2 = $6)
+      AND ($7::text IS NULL OR b.category_l3 = $7)
+      AND ($8::text IS NULL OR b.category_l4 = $8)
+    GROUP BY COALESCE(b.${drillDownLevel}, 'UNKNOWN')
     ORDER BY ventas DESC
     LIMIT 10
   `;
-
   // Execute all queries
+const categoryParams = [startDate, endDate, reconcileOk, issuerRuc, categoryPathL1, categoryPathL2, categoryPathL3, categoryPathL4];
+  
   const [kpisResult, prevResult, trendsResult, weekdayResult, topCatResult] = await Promise.all([
-    pool.query(kpisQuery, [startDate, endDate, reconcileOk, issuerRuc]),
-    pool.query(prevKpisQuery, [prevStartStr, prevEnd, reconcileOk, issuerRuc]),
-    pool.query(trendsQuery, [startDate, endDate, reconcileOk, issuerRuc]),
-    pool.query(weekdayQuery, [startDate, endDate, reconcileOk, issuerRuc]),
-    pool.query(topCatQuery, [startDate, endDate, reconcileOk, issuerRuc])
+    pool.query(kpisQuery, categoryParams),
+    pool.query(prevKpisQuery, [prevStartStr, prevEnd, reconcileOk, issuerRuc, categoryPathL1, categoryPathL2, categoryPathL3, categoryPathL4]),
+    pool.query(trendsQuery, categoryParams),
+    pool.query(weekdayQuery, categoryParams),
+    pool.query(topCatQuery, categoryParams)
   ]);
 
   const current = kpisResult.rows[0] || {};
   const previous = prevResult.rows[0] || null;
 
   res.set('X-Query-Time-Ms', String(Date.now() - start));
-  res.json({
-    filters: { start: startDate, end: endDate, issuer_ruc: issuerRuc, reconcile_ok: reconcileOk },
+   res.json({
+    filters: { 
+      start: startDate, 
+      end: endDate, 
+      issuer_ruc: issuerRuc, 
+      reconcile_ok: reconcileOk,
+      category_path: { l1: categoryPathL1, l2: categoryPathL2, l3: categoryPathL3, l4: categoryPathL4 },
+      drill_down_level: drillDownLevel
+    },
     current: {
       ventas: Number(current.ventas || 0),
       transacciones: Number(current.transacciones || 0),
@@ -1084,8 +1222,15 @@ app.get('/api/sow_leakage/by_category', asyncHandler(async (req, res) => {
   const { rows } = await pool.query(query, [startDate, endDate, reconcileOk, issuerRuc, kThreshold]);
 
   res.set('X-Query-Time-Ms', String(Date.now() - start));
-  res.json({
-    filters: { start: startDate, end: endDate, issuer_ruc: issuerRuc, store_id: storeId, reconcile_ok: reconcileOk, k_threshold: kThreshold, category_level: categoryLevel, peer_scope: peerScope },
+   res.json({
+    filters: { 
+      start: startDate, 
+      end: endDate, 
+      issuer_ruc: issuerRuc, 
+      reconcile_ok: reconcileOk,
+      category_path: { l1: categoryPathL1, l2: categoryPathL2, l3: categoryPathL3, l4: categoryPathL4 },
+      drill_down_level: drillDownLevel
+    },
     data: rows.map(r => ({
       category_value: r.category_value,
       users: Number(r.users),
@@ -1138,7 +1283,14 @@ app.get('/api/switching/destinations', asyncHandler(async (req, res) => {
 
   res.set('X-Query-Time-Ms', String(Date.now() - start));
   res.json({
-    filters: { start: startDate, end: endDate, issuer_ruc: issuerRuc, reconcile_ok: reconcileOk, k_threshold: kThreshold },
+    filters: { 
+      start: startDate, 
+      end: endDate, 
+      issuer_ruc: issuerRuc, 
+      reconcile_ok: reconcileOk,
+      category_path: { l1: categoryPathL1, l2: categoryPathL2, l3: categoryPathL3, l4: categoryPathL4 },
+      drill_down_level: drillDownLevel
+    },
     data: rows.map(r => ({ destination: r.destination, users: Number(r.users), pct: Number(r.pct) })),
     disclaimers: SWITCHING_DISCLAIMERS
   });
@@ -1222,8 +1374,15 @@ app.get('/api/leakage/tree', asyncHandler(async (req, res) => {
   rows.forEach(r => { bucketMap[r.bucket] = { users: Number(r.users), pct: Number(r.pct) }; });
 
   res.set('X-Query-Time-Ms', String(Date.now() - start));
-  res.json({
-    filters: { start: startDate, end: endDate, issuer_ruc: issuerRuc, category_value: categoryValue, reconcile_ok: reconcileOk, k_threshold: kThreshold },
+    res.json({
+    filters: { 
+      start: startDate, 
+      end: endDate, 
+      issuer_ruc: issuerRuc, 
+      reconcile_ok: reconcileOk,
+      category_path: { l1: categoryPathL1, l2: categoryPathL2, l3: categoryPathL3, l4: categoryPathL4 },
+      drill_down_level: drillDownLevel
+    },
     waterfall: bucketOrder.map(b => ({ bucket: b, users: bucketMap[b]?.users || 0, pct: bucketMap[b]?.pct || 0 })),
     disclaimers: LEAKAGE_DISCLAIMERS
   });
@@ -1278,8 +1437,15 @@ app.get('/api/basket/breadth', asyncHandler(async (req, res) => {
   const { rows } = await pool.query(query, [startDate, endDate, reconcileOk, issuerRuc, kThreshold]);
 
   res.set('X-Query-Time-Ms', String(Date.now() - start));
-  res.json({
-    filters: { start: startDate, end: endDate, issuer_ruc: issuerRuc, reconcile_ok: reconcileOk, k_threshold: kThreshold, category_level: categoryLevel },
+   res.json({
+    filters: { 
+      start: startDate, 
+      end: endDate, 
+      issuer_ruc: issuerRuc, 
+      reconcile_ok: reconcileOk,
+      category_path: { l1: categoryPathL1, l2: categoryPathL2, l3: categoryPathL3, l4: categoryPathL4 },
+      drill_down_level: drillDownLevel
+    },
     data: rows.map(r => ({
       origin_month: r.origin_month.toISOString().split('T')[0].substring(0, 7),
       users: Number(r.users),
@@ -1363,8 +1529,15 @@ app.get('/api/loyalty/brands', asyncHandler(async (req, res) => {
 
   const first = rows[0] || {};
   res.set('X-Query-Time-Ms', String(Date.now() - start));
-  res.json({
-    filters: { start: startDate, end: endDate, issuer_ruc: issuerRuc, category_value: categoryValue, reconcile_ok: reconcileOk, k_threshold: kThreshold },
+   res.json({
+    filters: { 
+      start: startDate, 
+      end: endDate, 
+      issuer_ruc: issuerRuc, 
+      reconcile_ok: reconcileOk,
+      category_path: { l1: categoryPathL1, l2: categoryPathL2, l3: categoryPathL3, l4: categoryPathL4 },
+      drill_down_level: drillDownLevel
+    },
     tiers: first.tiers_json || { exclusive: 0, loyal: 0, prefer: 0, light: 0 },
     distribution: first.dist_json || { p10: 0, p25: 0, p50: 0, p75: 0, p90: 0 },
     data: rows.map(r => ({
@@ -1424,8 +1597,15 @@ app.get('/api/panel/summary', asyncHandler(async (req, res) => {
   const expansion = getExpansionFactor(issuerRuc, null);
 
   res.set('X-Query-Time-Ms', String(Date.now() - start));
-  res.json({
-    filters: { start: startDate, end: endDate, issuer_ruc: issuerRuc, store_id: storeId, reconcile_ok: reconcileOk },
+   res.json({
+    filters: { 
+      start: startDate, 
+      end: endDate, 
+      issuer_ruc: issuerRuc, 
+      reconcile_ok: reconcileOk,
+      category_path: { l1: categoryPathL1, l2: categoryPathL2, l3: categoryPathL3, l4: categoryPathL4 },
+      drill_down_level: drillDownLevel
+    },
     panel: {
       customers_n: customersN,
       spend_in_x_usd: Math.round(Number(r.spend_in_x_usd || 0) * 100) / 100,
