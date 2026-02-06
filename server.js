@@ -737,7 +737,10 @@ app.get('/api/retailers', asyncHandler(async (req, res) => {
 // CATEGORIES LIST (Products + Commerce)
 // =============================================================================
 app.get('/api/categories', asyncHandler(async (req, res) => {
-  const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
+const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
+  const peerScope = (req.query.peer_scope || 'all').toLowerCase();
+
+  const errors = [];
   const type = req.query.type || 'all'; // 'product', 'commerce', 'all'
   
   const productCol = VALID_CAT_COLS[categoryLevel] || 'category_l1';
@@ -816,7 +819,8 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
   const endDate = parseDate(req.query.end);
   const issuerRuc = parseString(req.query.issuer_ruc);
   const reconcileOk = parseBool(req.query.reconcile_ok, null); // FIX: default NULL
-  const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
+const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
+  const peerScope = (req.query.peer_scope || 'all').toLowerCase();
 
   const errors = [];
   if (!startDate) errors.push('Invalid or missing start date');
@@ -1030,21 +1034,42 @@ app.get('/api/sow_leakage/by_category', asyncHandler(async (req, res) => {
   const catCol = VALID_CAT_COLS[categoryLevel];
   const start = Date.now();
 
+  // Build peer scope filter for market denominator
+  let peerScopeJoin = '';
+  let peerScopeWhere = '';
+  
+  if (peerScope === 'peers') {
+    // Solo comercios del mismo tipo (issuer_l1)
+    peerScopeJoin = `
+      LEFT JOIN public.dim_issuer di_x ON di_x.issuer_ruc = $4
+      LEFT JOIN public.dim_issuer di_b ON di_b.issuer_ruc = b.issuer_ruc`;
+    peerScopeWhere = `AND (b.issuer_ruc = $4 OR di_b.issuer_l1 = di_x.issuer_l1)`;
+  } else if (peerScope === 'extended') {
+    // Comercios que venden la categoría de producto (requiere category_value en filtro)
+    // Por ahora igual que ALL, se refina después
+    peerScopeJoin = '';
+    peerScopeWhere = '';
+  }
+  // 'all' = sin filtro adicional (default)
+
   const query = `
     WITH cohort AS (
       SELECT DISTINCT b.user_id FROM analytics.radiance_base_v1 b
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
         AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
-        AND b.issuer_ruc = $4  AND b.user_id IS NOT NULL
+        AND b.issuer_ruc = $4 AND b.user_id IS NOT NULL
     ),
-    user_cat AS (
-      SELECT b.user_id, COALESCE(b.${catCol}, 'UNKNOWN') AS category_value, b.issuer_ruc, SUM(COALESCE(b.line_total, 0)) AS spend
+    peer_spend AS (
+      SELECT b.user_id, COALESCE(b.${catCol}, 'UNKNOWN') AS category_value, b.issuer_ruc, 
+        SUM(COALESCE(b.line_total, 0)) AS spend
       FROM analytics.radiance_base_v1 b
       INNER JOIN cohort c ON b.user_id = c.user_id
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
+      ${peerScopeJoin}
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
         AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
+        ${peerScopeWhere}
       GROUP BY b.user_id, COALESCE(b.${catCol}, 'UNKNOWN'), b.issuer_ruc
     )
     SELECT category_value, COUNT(DISTINCT user_id) AS users,
@@ -1052,14 +1077,14 @@ app.get('/api/sow_leakage/by_category', asyncHandler(async (req, res) => {
       SUM(spend) AS spend_market_usd,
       SUM(spend) - SUM(CASE WHEN issuer_ruc = $4 THEN spend ELSE 0 END) AS leakage_usd,
       ROUND(100.0 * SUM(CASE WHEN issuer_ruc = $4 THEN spend ELSE 0 END) / NULLIF(SUM(spend), 0), 2) AS sow_pct
-    FROM user_cat GROUP BY category_value HAVING COUNT(DISTINCT user_id) >= $5
+    FROM peer_spend GROUP BY category_value HAVING COUNT(DISTINCT user_id) >= $5
     ORDER BY spend_in_x_usd DESC
   `;
-const { rows } = await pool.query(query, [startDate, endDate, reconcileOk, issuerRuc, kThreshold]);
+  const { rows } = await pool.query(query, [startDate, endDate, reconcileOk, issuerRuc, kThreshold]);
 
   res.set('X-Query-Time-Ms', String(Date.now() - start));
   res.json({
-    filters: { start: startDate, end: endDate, issuer_ruc: issuerRuc, store_id: storeId, reconcile_ok: reconcileOk, k_threshold: kThreshold, category_level: categoryLevel },
+    filters: { start: startDate, end: endDate, issuer_ruc: issuerRuc, store_id: storeId, reconcile_ok: reconcileOk, k_threshold: kThreshold, category_level: categoryLevel, peer_scope: peerScope },
     data: rows.map(r => ({
       category_value: r.category_value,
       users: Number(r.users),
@@ -1128,7 +1153,8 @@ app.get('/api/leakage/tree', asyncHandler(async (req, res) => {
   const categoryValue = parseString(req.query.category_value);
   const reconcileOk = parseBool(req.query.reconcile_ok, null);
   const kThreshold = parseKThreshold(req.query.k_threshold);
-  const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
+const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
+  const peerScope = (req.query.peer_scope || 'all').toLowerCase();
 
   const errors = [];
   if (!startDate) errors.push('Invalid or missing start date');
@@ -1211,7 +1237,8 @@ app.get('/api/basket/breadth', asyncHandler(async (req, res) => {
   const issuerRuc = parseString(req.query.issuer_ruc);
   const reconcileOk = parseBool(req.query.reconcile_ok, null);
   const kThreshold = parseKThreshold(req.query.k_threshold);
-  const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
+const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
+  const peerScope = (req.query.peer_scope || 'all').toLowerCase();
 
   const errors = [];
   if (!startDate) errors.push('Invalid or missing start date');
@@ -1272,7 +1299,8 @@ app.get('/api/loyalty/brands', asyncHandler(async (req, res) => {
   const categoryValue = parseString(req.query.category_value);
   const reconcileOk = parseBool(req.query.reconcile_ok, null);
   const kThreshold = parseKThreshold(req.query.k_threshold);
-  const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
+const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
+  const peerScope = (req.query.peer_scope || 'all').toLowerCase();
 
   const errors = [];
   if (!startDate) errors.push('Invalid or missing start date');
