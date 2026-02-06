@@ -741,7 +741,7 @@ app.get('/api/sow_leakage/by_category', asyncHandler(async (req, res) => {
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
         AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
-      GROUP BY b.user_id, category_value, b.issuer_ruc
+      GROUP BY b.user_id, COALESCE(b.${catCol}, 'UNKNOWN'), b.issuer_ruc
     )
     SELECT category_value, COUNT(DISTINCT user_id) AS users,
       SUM(CASE WHEN issuer_ruc = $4 THEN spend ELSE 0 END) AS spend_in_x_usd,
@@ -1198,7 +1198,7 @@ app.get('/api/deck/commerce', asyncHandler(async (req, res) => {
       FROM analytics.radiance_base_v1 b INNER JOIN cohort c ON b.user_id = c.user_id
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
-      GROUP BY b.user_id, category_value, b.issuer_ruc
+      GROUP BY b.user_id, COALESCE(b.${catCol}, 'UNKNOWN'), b.issuer_ruc
     )
     SELECT category_value, COUNT(DISTINCT user_id) AS users,
       SUM(CASE WHEN issuer_ruc = $4 THEN spend ELSE 0 END) AS spend_in_x_usd, SUM(spend) AS spend_market_usd,
@@ -1231,7 +1231,7 @@ app.get('/api/deck/commerce', asyncHandler(async (req, res) => {
     LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
     WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
       AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3) AND b.issuer_ruc = $4 AND b.user_id IS NOT NULL
-    GROUP BY cat_val HAVING cat_val NOT IN ('UNKNOWN', 'OTHER_SUPPRESSED') ORDER BY spend DESC LIMIT 1
+    GROUP BY 1 HAVING COALESCE(b.${catCol}, 'UNKNOWN') NOT IN ('UNKNOWN', 'OTHER_SUPPRESSED') ORDER BY spend DESC LIMIT 1
   `;
   const topCatResult = await pool.query(topCatQuery, [startDate, endDate, reconcileOk, issuerRuc]);
   const topCategory = topCatResult.rows[0]?.cat_val || null;
