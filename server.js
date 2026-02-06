@@ -191,9 +191,10 @@ function generateLandingHTML() {
   <section class="section">
     <h2>Quick Start</h2>
     <div class="quick-links">
-      <a href="/api/health" class="quick-link">Health Check</a>
-      <a href="/api/deck/commerce?start=2025-01-01&end=2025-07-01&issuer_ruc=DEMO" class="quick-link">Demo Deck</a>
-    </div>
+  <a href="/index.html" class="quick-link">Dashboard</a>
+  <a href="/api/health" class="quick-link">Health Check</a>
+  <a href="/api/deck/commerce?start=2025-01-01&end=2025-07-01&issuer_ruc=DEMO" class="quick-link">Demo Deck</a>
+</div>
   </section>
 
   <section class="section">
@@ -689,9 +690,6 @@ function generateDeckHTML(data) {
 // =============================================================================
 // ROUTES: LANDING & HEALTH
 // =============================================================================
-app.get('/dashboard', (req, res) => {
-  res.redirect('/index.html');
-});
 app.get('/', (req, res) => {
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.send(generateLandingHTML());
