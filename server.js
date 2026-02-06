@@ -732,7 +732,7 @@ app.get('/api/sow_leakage/by_category', asyncHandler(async (req, res) => {
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
         AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
-        AND b.issuer_ruc = $4 AND ($5::text IS NULL OR b.store_id::text = $5) AND b.user_id IS NOT NULL
+        AND b.issuer_ruc = $4  AND b.user_id IS NOT NULL
     ),
     user_cat AS (
       SELECT b.user_id, COALESCE(b.${catCol}, 'UNKNOWN') AS category_value, b.issuer_ruc, SUM(COALESCE(b.line_total, 0)) AS spend
@@ -1178,7 +1178,7 @@ app.get('/api/deck/commerce', asyncHandler(async (req, res) => {
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
         AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
-        AND b.issuer_ruc = $4 AND ($5::text IS NULL OR b.store_id::text = $5) AND b.user_id IS NOT NULL
+        AND b.issuer_ruc = $4  AND b.user_id IS NOT NULL
     )
     SELECT month, COUNT(DISTINCT user_id) AS customers, SUM(spend) AS spend FROM base_txn GROUP BY month ORDER BY month
   `;
