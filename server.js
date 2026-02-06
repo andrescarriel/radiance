@@ -741,10 +741,8 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
         b.user_id,
         b.cufe,
         b.invoice_date,
-        b.product_id,
         COALESCE(b.${catCol}, 'UNKNOWN') AS category,
-        COALESCE(b.line_total, 0) AS line_total,
-        EXTRACT(DOW FROM b.invoice_date) AS day_of_week
+        COALESCE(b.line_total, 0) AS line_total
       FROM analytics.radiance_base_v1 b
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
@@ -757,7 +755,6 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
         SUM(line_total) AS ventas,
         COUNT(DISTINCT cufe) AS transacciones,
         COUNT(DISTINCT user_id) AS clientes,
-        COUNT(DISTINCT product_id) AS productos,
         COUNT(DISTINCT category) AS categorias
       FROM base
     ),
@@ -876,7 +873,6 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
       clientes: Number(current.clientes || 0),
       ticket_promedio: Number(current.ticket_promedio || 0),
       frecuencia: Number(current.frecuencia || 0),
-      productos: Number(current.productos || 0),
       categorias: Number(current.categorias || 0),
       sow_pct: Number(current.sow_pct || 0)
     },
