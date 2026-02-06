@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LÜM Radiance | Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">LÜM</div>
+      <div class="logo-sub">RADIANCE</div>
+    </div>
+    
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item active" data-module="overview">
+        <span class="nav-icon">📊</span>
+        <span class="nav-label">Overview</span>
+      </a>
+      <a href="#" class="nav-item" data-module="capture">
+        <span class="nav-icon">🎯</span>
+        <span class="nav-label">Commerce Capture</span>
+      </a>
+      <a href="#" class="nav-item" data-module="switching">
+        <span class="nav-icon">🔄</span>
+        <span class="nav-label">Switching</span>
+      </a>
+      <a href="#" class="nav-item" data-module="leakage">
+        <span class="nav-icon">🌊</span>
+        <span class="nav-label">Leakage</span>
+      </a>
+      <a href="#" class="nav-item" data-module="basket">
+        <span class="nav-icon">🛒</span>
+        <span class="nav-label">Basket</span>
+      </a>
+      <a href="#" class="nav-item" data-module="loyalty">
+        <span class="nav-icon">💎</span>
+        <span class="nav-label">Loyalty</span>
+      </a>
+    </nav>
+    
+    <div class="sidebar-footer">
+      <div class="version">v2.2.0</div>
+    </div>
+  </aside>
+
+  <!-- MAIN CONTENT -->
+  <main class="main">
+    <!-- GLOBAL FILTERS -->
+    <header class="filters-bar">
+      <div class="filter-group">
+        <label>Retailer</label>
+        <input type="text" id="filterIssuerRuc" placeholder="issuer_ruc" value="">
+      </div>
+      <div class="filter-group">
+        <label>Desde</label>
+        <input type="date" id="filterStart" value="2025-01-01">
+      </div>
+      <div class="filter-group">
+        <label>Hasta</label>
+        <input type="date" id="filterEnd" value="2025-07-01">
+      </div>
+      <div class="filter-group">
+        <label>Categoría</label>
+        <select id="filterCategoryLevel">
+          <option value="l1">L1</option>
+          <option value="l2">L2</option>
+          <option value="l3">L3</option>
+          <option value="l4">L4</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>Reconcile</label>
+        <select id="filterReconcile">
+          <option value="">All</option>
+          <option value="true">True</option>
+          <option value="false">False</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>K-Threshold</label>
+        <input type="number" id="filterKThreshold" value="5" min="1" max="100">
+      </div>
+      <button id="btnApplyFilters" class="btn-primary">Aplicar</button>
+    </header>
+
+    <!-- MODULE: OVERVIEW -->
+    <section class="module" id="moduleOverview">
+      <div class="module-header">
+        <h1>Overview</h1>
+        <p class="module-desc">KPIs principales y tendencias del período</p>
+      </div>
+      
+      <!-- KPI Cards Row 1: Core -->
+      <div class="kpi-grid kpi-grid-4">
+        <div class="kpi-card hero">
+          <div class="kpi-label">Ventas Totales</div>
+          <div class="kpi-value" id="kpiVentas">—</div>
+          <div class="kpi-delta" id="kpiVentasDelta"></div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Transacciones</div>
+          <div class="kpi-value" id="kpiTxn">—</div>
+          <div class="kpi-delta" id="kpiTxnDelta"></div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Clientes Únicos</div>
+          <div class="kpi-value" id="kpiClientes">—</div>
+          <div class="kpi-delta" id="kpiClientesDelta"></div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Ticket Promedio</div>
+          <div class="kpi-value" id="kpiTicket">—</div>
+          <div class="kpi-delta" id="kpiTicketDelta"></div>
+        </div>
+      </div>
+      
+      <!-- KPI Cards Row 2: Secondary -->
+      <div class="kpi-grid kpi-grid-4">
+        <div class="kpi-card">
+          <div class="kpi-label">Frecuencia</div>
+          <div class="kpi-value" id="kpiFrecuencia">—</div>
+          <div class="kpi-sub">txn/cliente</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Productos Únicos</div>
+          <div class="kpi-value" id="kpiProductos">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Categorías</div>
+          <div class="kpi-value" id="kpiCategorias">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Share of Wallet</div>
+          <div class="kpi-value" id="kpiSoW">—</div>
+        </div>
+      </div>
+
+      <!-- Charts Row -->
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>Ventas por Mes</h3>
+            <span class="chart-meta">USD · Observed Panel</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartVentasMes"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>Clientes por Mes</h3>
+            <span class="chart-meta">Usuarios únicos</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartClientesMes"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>Transacciones por Día de Semana</h3>
+            <span class="chart-meta">Distribución %</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartTxnDia"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>Top 10 Categorías</h3>
+            <span class="chart-meta">Por ventas USD</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartTopCategorias"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- MODULE: CAPTURE -->
+    <section class="module hidden" id="moduleCapture">
+      <div class="module-header">
+        <h1>Commerce Capture</h1>
+        <p class="module-desc">Share of Wallet y Leakage por categoría</p>
+      </div>
+      
+      <div class="kpi-grid kpi-grid-3">
+        <div class="kpi-card hero">
+          <div class="kpi-label">SoW Global</div>
+          <div class="kpi-value" id="captureSoW">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Spend in X</div>
+          <div class="kpi-value" id="captureInX">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Leakage</div>
+          <div class="kpi-value" id="captureLeakage">—</div>
+        </div>
+      </div>
+
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>Share of Wallet por Categoría</h3>
+            <span class="chart-meta">% del gasto capturado</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartCaptureSoW"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>In-X vs Leakage por Categoría</h3>
+            <span class="chart-meta">USD</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartCaptureStacked"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <div class="table-header">
+          <h3>Detalle por Categoría</h3>
+        </div>
+        <div class="table-body">
+          <table id="tableCaptureDetail">
+            <thead>
+              <tr>
+                <th>Categoría</th>
+                <th class="text-right">Usuarios</th>
+                <th class="text-right">Gasto X</th>
+                <th class="text-right">Gasto Market</th>
+                <th class="text-right">Leakage</th>
+                <th class="text-right">SoW %</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- MODULE: SWITCHING -->
+    <section class="module hidden" id="moduleSwitching">
+      <div class="module-header">
+        <h1>Switching Destinations</h1>
+        <p class="module-desc">¿A dónde van los clientes cuando no compran en X?</p>
+      </div>
+      
+      <div class="charts-row single">
+        <div class="chart-card wide">
+          <div class="chart-header">
+            <h3>Top Destinos Competencia</h3>
+            <span class="chart-meta">% del cohort</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartSwitching"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <div class="table-header">
+          <h3>Detalle de Destinos</h3>
+        </div>
+        <div class="table-body">
+          <table id="tableSwitching">
+            <thead>
+              <tr>
+                <th>Destino</th>
+                <th class="text-right">Usuarios</th>
+                <th class="text-right">% Cohort</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- MODULE: LEAKAGE -->
+    <section class="module hidden" id="moduleLeakage">
+      <div class="module-header">
+        <h1>Leakage Waterfall</h1>
+        <p class="module-desc">¿Por qué los usuarios no recompran en X?</p>
+      </div>
+
+      <div class="filter-inline">
+        <label>Categoría:</label>
+        <select id="leakageCategorySelect">
+          <option value="">Selecciona categoría...</option>
+        </select>
+      </div>
+      
+      <div class="charts-row single">
+        <div class="chart-card wide">
+          <div class="chart-header">
+            <h3>Waterfall 6-Bucket</h3>
+            <span class="chart-meta">% del cohort por bucket</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartLeakage"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="buckets-legend">
+        <div class="bucket-item"><span class="bucket-color" style="background:#10b981"></span> RETAINED: Mantiene spend ≥90%</div>
+        <div class="bucket-item"><span class="bucket-color" style="background:#f59e0b"></span> CATEGORY_GONE: Dejó la categoría</div>
+        <div class="bucket-item"><span class="bucket-color" style="background:#f97316"></span> REDUCED_BASKET: Spend &lt;50%</div>
+        <div class="bucket-item"><span class="bucket-color" style="background:#fb923c"></span> REDUCED_FREQ: Menos visitas</div>
+        <div class="bucket-item"><span class="bucket-color" style="background:#ef4444"></span> DELAYED_ONLY: Solo retraso</div>
+        <div class="bucket-item"><span class="bucket-color" style="background:#64748b"></span> FULL_CHURN: Sin actividad</div>
+      </div>
+    </section>
+
+    <!-- MODULE: BASKET -->
+    <section class="module hidden" id="moduleBasket">
+      <div class="module-header">
+        <h1>Basket Analysis</h1>
+        <p class="module-desc">Breadth y composición del basket</p>
+      </div>
+      
+      <div class="kpi-grid kpi-grid-2">
+        <div class="kpi-card">
+          <div class="kpi-label">Avg Breadth Market</div>
+          <div class="kpi-value" id="basketBreadthMarket">—</div>
+          <div class="kpi-sub"># categorías/mes</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Avg Breadth In-X</div>
+          <div class="kpi-value" id="basketBreadthInX">—</div>
+          <div class="kpi-sub"># categorías/mes</div>
+        </div>
+      </div>
+
+      <div class="charts-row single">
+        <div class="chart-card wide">
+          <div class="chart-header">
+            <h3>Breadth: Market vs In-X por Mes</h3>
+            <span class="chart-meta"># categorías promedio</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartBasket"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- MODULE: LOYALTY -->
+    <section class="module hidden" id="moduleLoyalty">
+      <div class="module-header">
+        <h1>Brand Loyalty</h1>
+        <p class="module-desc">Lealtad a marcas dentro de categorías</p>
+      </div>
+
+      <div class="filter-inline">
+        <label>Categoría:</label>
+        <select id="loyaltyCategorySelect">
+          <option value="">Selecciona categoría...</option>
+        </select>
+      </div>
+
+      <div class="kpi-grid kpi-grid-4">
+        <div class="kpi-card">
+          <div class="kpi-label">Exclusive (≥95%)</div>
+          <div class="kpi-value" id="loyaltyExclusive">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Loyal (≥80%)</div>
+          <div class="kpi-value" id="loyaltyLoyal">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Prefer (≥50%)</div>
+          <div class="kpi-value" id="loyaltyPrefer">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Light (&lt;50%)</div>
+          <div class="kpi-value" id="loyaltyLight">—</div>
+        </div>
+      </div>
+
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>Distribución de Lealtad</h3>
+            <span class="chart-meta">Usuarios por tier</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartLoyaltyTiers"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>User Brand Share (Percentiles)</h3>
+            <span class="chart-meta">% share p10-p90</span>
+          </div>
+          <div class="chart-body">
+            <canvas id="chartLoyaltyDist"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <div class="table-header">
+          <h3>Top Marcas</h3>
+        </div>
+        <div class="table-body">
+          <table id="tableLoyalty">
+            <thead>
+              <tr>
+                <th>Marca</th>
+                <th class="text-right">Buyers</th>
+                <th class="text-right">Penetración</th>
+                <th class="text-right">p75 Share</th>
+                <th class="text-right">Loyalty Rate</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- LOADING OVERLAY -->
+    <div class="loading-overlay hidden" id="loadingOverlay">
+      <div class="spinner"></div>
+      <div class="loading-text">Cargando datos...</div>
+    </div>
+
+    <!-- TOAST NOTIFICATIONS -->
+    <div class="toast-container" id="toastContainer"></div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
