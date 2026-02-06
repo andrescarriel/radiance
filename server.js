@@ -689,6 +689,9 @@ function generateDeckHTML(data) {
 // =============================================================================
 // ROUTES: LANDING & HEALTH
 // =============================================================================
+app.get('/dashboard', (req, res) => {
+  res.redirect('/index.html');
+});
 app.get('/', (req, res) => {
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.send(generateLandingHTML());
