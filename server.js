@@ -1140,27 +1140,19 @@ app.get('/api/leakage/tree', asyncHandler(async (req, res) => {
   const catCol = VALID_CAT_COLS[categoryLevel] || 'category_l1';
   const start = Date.now();
 
-  const query = `
+ const query = `
     WITH base_txn AS (
       SELECT b.user_id, DATE_TRUNC('month', b.invoice_date)::date AS txn_month, b.issuer_ruc,
-        SUM(COALESCE(b.line_total, 0))AS line_total, COUNT(DISTINCT b.cufe) AS visits
+        SUM(COALESCE(b.line_total, 0)) AS line_total, COUNT(DISTINCT b.cufe) AS visits
       FROM analytics.radiance_base_v1 b
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
         AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
-        AND b.user_id IS NOT NULL AND COALESCE(b.${catCol}, 'UNKNOWN') = $5
-      GROUP BY b.user_id, txn_month, b.issuer_ruc
+        AND b.user_id IS NOT NULL
+        AND COALESCE(b.${catCol}, 'UNKNOWN') = $5
+      GROUP BY b.user_id, DATE_TRUNC('month', b.invoice_date)::date, b.issuer_ruc
     ),
     months AS (SELECT DISTINCT txn_month FROM base_txn ORDER BY txn_month),
-    month_pairs AS (SELECT txn_month AS origin, LEAD(txn_month) OVER (ORDER BY txn_month) AS next FROM months),
-    user_month AS (
-      SELECT user_id, txn_month,
-        SUM(CASE WHEN issuer_ruc = $4 THEN visits ELSE 0 END) AS visits_x,
-        SUM(CASE WHEN issuer_ruc = $4 THEN line_total ELSE 0 END) AS spend_x,
-        SUM(visits) AS visits_total
-      FROM base_txn GROUP BY user_id, txn_month
-    ),
-    cohort AS (SELECT user_id, txn_month AS origin FROM user_month WHERE visits_x > 0),
     transitions AS (
       SELECT c.user_id, c.origin, mp.next,
         COALESCE(um_o.visits_x, 0) AS vx_o, COALESCE(um_o.spend_x, 0) AS sx_o,
@@ -1221,14 +1213,15 @@ app.get('/api/basket/breadth', asyncHandler(async (req, res) => {
   const catCol = VALID_CAT_COLS[categoryLevel] || 'category_l1';
   const start = Date.now();
 
-  const query = `
+ const query = `
     WITH base_txn AS (
       SELECT b.user_id, DATE_TRUNC('month', b.invoice_date)::date AS txn_month, b.issuer_ruc,
         COALESCE(b.${catCol}, 'UNKNOWN') AS cat_val
       FROM analytics.radiance_base_v1 b
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
-        AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3) AND b.user_id IS NOT NULL
+        AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
+        AND b.user_id IS NOT NULL
     ),
     cohort AS (SELECT DISTINCT user_id, txn_month FROM base_txn WHERE issuer_ruc = $4),
     user_breadth AS (
@@ -1366,12 +1359,13 @@ app.get('/api/panel/summary', asyncHandler(async (req, res) => {
 
   const start = Date.now();
   const query = `
-    WITH base_txn AS (
-      SELECT b.user_id, b.cufe, b.invoice_date, b.issuer_ruc, SUM(COALESCE(b.line_total, 0))AS line_total
+ WITH base_txn AS (
+      SELECT b.user_id, b.cufe, b.invoice_date, b.issuer_ruc, SUM(COALESCE(b.line_total, 0)) AS line_total
       FROM analytics.radiance_base_v1 b
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
         AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3) AND b.user_id IS NOT NULL
+      GROUP BY b.user_id, b.cufe, b.invoice_date, b.issuer_ruc
     ),
     panel_x AS (
       SELECT COUNT(DISTINCT user_id) AS customers_n, SUM(line_total) AS spend_in_x_usd,
@@ -1535,11 +1529,12 @@ app.get('/api/deck/commerce', asyncHandler(async (req, res) => {
   // PANEL SUMMARY
   const panelQuery = `
     WITH base_txn AS (
-      SELECT b.user_id, b.cufe, b.invoice_date, b.issuer_ruc, SUM(COALESCE(b.line_total, 0))AS line_total
+      SELECT b.user_id, b.cufe, b.invoice_date, b.issuer_ruc, SUM(COALESCE(b.line_total, 0)) AS line_total
       FROM analytics.radiance_base_v1 b
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
         AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3) AND b.user_id IS NOT NULL
+      GROUP BY b.user_id, b.cufe, b.invoice_date, b.issuer_ruc
     ),
     panel_x AS (
       SELECT COUNT(DISTINCT user_id) AS customers_n, SUM(line_total) AS spend_in_x_usd,
@@ -1565,15 +1560,17 @@ app.get('/api/deck/commerce', asyncHandler(async (req, res) => {
     projection: { expansion_factor: expansion.factor, expansion_source: expansion.source, projected_households: Math.round(Number(panelRow.customers_n || 0) * expansion.factor) }
   };
 
-  // PANEL TREND
+// PANEL TREND
   const trendQuery = `
     WITH base_txn AS (
-      SELECT b.user_id, DATE_TRUNC('month', b.invoice_date)::date AS month, SUM(COALESCE(b.line_total, 0))AS spend
+      SELECT b.user_id, DATE_TRUNC('month', b.invoice_date)::date AS month, SUM(COALESCE(b.line_total, 0)) AS spend
       FROM analytics.radiance_base_v1 b
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
         AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
-        AND b.issuer_ruc = $4  AND b.user_id IS NOT NULL
+        AND b.issuer_ruc = $4
+        AND b.user_id IS NOT NULL
+      GROUP BY b.user_id, DATE_TRUNC('month', b.invoice_date)::date
     )
     SELECT month, COUNT(DISTINCT user_id) AS customers, SUM(spend) AS spend FROM base_txn GROUP BY month ORDER BY month
   `;
