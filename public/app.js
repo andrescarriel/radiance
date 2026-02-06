@@ -754,11 +754,34 @@ const hideBanner = () => {
 };
 
 // -----------------------------------------------------------------------------
+// LOAD RETAILERS
+// -----------------------------------------------------------------------------
+const loadRetailers = async () => {
+  try {
+    const res = await fetch('/api/retailers');
+    const data = await res.json();
+    const select = $('#filterIssuerRuc');
+    select.innerHTML = '<option value="">Selecciona retailer...</option>';
+    data.data.forEach(r => {
+      const opt = document.createElement('option');
+      opt.value = r.issuer_ruc;
+      opt.textContent = `${r.issuer_name} (${r.users.toLocaleString()} users)`;
+      select.appendChild(opt);
+    });
+  } catch (e) {
+    console.error('Error loading retailers:', e);
+    $('#filterIssuerRuc').innerHTML = '<option value="">Error cargando retailers</option>';
+  }
+};
+
+
+// -----------------------------------------------------------------------------
 // INIT
 // -----------------------------------------------------------------------------
 document.addEventListener('DOMContentLoaded', () => {
   initNavigation();
   initEventListeners();
+  loadRetailers();
   
   // Check for issuer_ruc and auto-load
   const params = new URLSearchParams(window.location.search);
