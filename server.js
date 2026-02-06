@@ -1114,6 +1114,97 @@ app.get('/api/panel/config', (req, res) => {
   res.json({ method: 'expansion_factor', default_factor: config.defaultFactor, overrides_count: Object.keys(config.overrides).length });
 });
 
+// DECK FILTER PAGE
+app.get('/deck', (req, res) => {
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LÜM Radiance | Generate Deck</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root { --bg: #0b0f19; --card: #12172a; --border: rgba(99,102,241,0.2); --text: #f1f5f9; --muted: #64748b; --cyan: #06b6d4; --purple: #8b5cf6; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 40px 20px; }
+    .container { max-width: 500px; margin: 0 auto; }
+    .logo { font-size: 11px; font-weight: 700; letter-spacing: 4px; color: var(--cyan); text-align: center; margin-bottom: 8px; }
+    h1 { font-size: 28px; font-weight: 800; text-align: center; margin-bottom: 32px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 32px; }
+    .field { margin-bottom: 20px; }
+    label { display: block; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+    input, select { width: 100%; padding: 12px 16px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 14px; font-family: 'JetBrains Mono', monospace; }
+    input:focus, select:focus { outline: none; border-color: var(--cyan); }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    button { width: 100%; padding: 14px; background: linear-gradient(135deg, var(--cyan), var(--purple)); border: none; border-radius: 8px; color: white; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 12px; transition: transform 0.2s, box-shadow 0.2s; }
+    button:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(6,182,212,0.3); }
+    .formats { display: flex; gap: 12px; margin-top: 16px; }
+    .formats button { flex: 1; background: var(--card); border: 1px solid var(--border); }
+    .formats button:hover { border-color: var(--cyan); background: var(--card); }
+    .back { display: block; text-align: center; margin-top: 24px; color: var(--muted); font-size: 13px; text-decoration: none; }
+    .back:hover { color: var(--cyan); }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="logo">LÜM RADIANCE</div>
+  <h1>Generate Deck</h1>
+  <div class="card">
+    <form id="deckForm">
+      <div class="field">
+        <label>Issuer RUC *</label>
+        <input type="text" name="issuer_ruc" placeholder="ej: 8-NT-2-12345" required>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Start Date *</label>
+          <input type="date" name="start" value="2025-01-01" required>
+        </div>
+        <div class="field">
+          <label>End Date *</label>
+          <input type="date" name="end" value="2025-07-01" required>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Category Level</label>
+          <select name="category_level">
+            <option value="l1">L1 (default)</option>
+            <option value="l2">L2</option>
+            <option value="l3">L3</option>
+            <option value="l4">L4</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>K-Threshold</label>
+          <input type="number" name="k_threshold" value="5" min="1">
+        </div>
+      </div>
+      <button type="submit">Generate HTML Deck</button>
+      <div class="formats">
+        <button type="button" onclick="openJSON()">Get JSON</button>
+      </div>
+    </form>
+  </div>
+  <a href="/" class="back">← Back to API</a>
+</div>
+<script>
+  const form = document.getElementById('deckForm');
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const params = new URLSearchParams(new FormData(form)).toString();
+    window.open('/api/deck/commerce?' + params, '_blank');
+  });
+  function openJSON() {
+    const params = new URLSearchParams(new FormData(form)).toString();
+    window.open('/api/deck/commerce?' + params + '&format=json', '_blank');
+  }
+</script>
+</body>
+</html>`);
+});
+
 // =============================================================================
 // SPRINT 7: DECK (Full HTML with Charts)
 // =============================================================================
@@ -1231,7 +1322,7 @@ app.get('/api/deck/commerce', asyncHandler(async (req, res) => {
     LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
     WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
       AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3) AND b.issuer_ruc = $4 AND b.user_id IS NOT NULL
-    GROUP BY 1 HAVING COALESCE(b.${catCol}, 'UNKNOWN') NOT IN ('UNKNOWN', 'OTHER_SUPPRESSED') ORDER BY spend DESC LIMIT 1
+    GROUP BY COALESCE(b.${catCol}, 'UNKNOWN') HAVING COALESCE(b.${catCol}, 'UNKNOWN') NOT IN ('UNKNOWN', 'OTHER_SUPPRESSED') ORDER BY spend DESC LIMIT 1
   `;
   const topCatResult = await pool.query(topCatQuery, [startDate, endDate, reconcileOk, issuerRuc]);
   const topCategory = topCatResult.rows[0]?.cat_val || null;
