@@ -707,6 +707,34 @@ app.get('/api/health', asyncHandler(async (req, res) => {
 }));
 
 // =============================================================================
+// RETAILERS LIST
+// =============================================================================
+app.get('/api/retailers', asyncHandler(async (req, res) => {
+  const query = `
+    SELECT DISTINCT 
+      b.issuer_ruc,
+      COALESCE(b.issuer_name, b.issuer_ruc) AS issuer_name,
+      COUNT(DISTINCT b.user_id) AS users,
+      COUNT(DISTINCT b.cufe) AS invoices
+    FROM analytics.radiance_base_v1 b
+    WHERE b.issuer_ruc IS NOT NULL
+    GROUP BY b.issuer_ruc, b.issuer_name
+    HAVING COUNT(DISTINCT b.user_id) >= 10
+    ORDER BY invoices DESC
+    LIMIT 50
+  `;
+  const { rows } = await pool.query(query);
+  res.json({
+    data: rows.map(r => ({
+      issuer_ruc: r.issuer_ruc,
+      issuer_name: r.issuer_name,
+      users: Number(r.users),
+      invoices: Number(r.invoices)
+    }))
+  });
+}));
+
+// =============================================================================
 // SPRINT 0: KPIs SUMMARY (Overview Dashboard)
 // =============================================================================
 app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
