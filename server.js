@@ -1072,7 +1072,7 @@ app.get('/api/panel/summary', asyncHandler(async (req, res) => {
     panel_x AS (
       SELECT COUNT(DISTINCT user_id) AS customers_n, SUM(line_total) AS spend_in_x_usd,
         COUNT(DISTINCT cufe) AS invoices_n, COUNT(DISTINCT DATE_TRUNC('month', invoice_date)) AS active_months
-      FROM base_txn WHERE issuer_ruc = $4 AND ($5::text IS NULL OR store_id::text = $5)
+      FROM base_txn WHERE issuer_ruc = $4 -- store_id filter removed
     ),
     panel_market AS (
       SELECT SUM(line_total) AS spend_market_usd FROM base_txn
@@ -1082,7 +1082,7 @@ app.get('/api/panel/summary', asyncHandler(async (req, res) => {
       CASE WHEN px.customers_n > 0 THEN ROUND(px.spend_in_x_usd / px.customers_n, 2) ELSE 0 END AS avg_spend
     FROM panel_x px CROSS JOIN panel_market pm
   `;
-  const { rows } = await pool.query(query, [startDate, endDate, reconcileOk, issuerRuc, storeId]);
+  const { rows } = await pool.query(query, [startDate, endDate, reconcileOk, issuerRuc]);
   const r = rows[0] || {};
   const customersN = Number(r.customers_n || 0);
   const expansion = getExpansionFactor(issuerRuc, null);
@@ -1149,14 +1149,14 @@ app.get('/api/deck/commerce', asyncHandler(async (req, res) => {
     panel_x AS (
       SELECT COUNT(DISTINCT user_id) AS customers_n, SUM(line_total) AS spend_in_x_usd,
         COUNT(DISTINCT cufe) AS invoices_n, COUNT(DISTINCT DATE_TRUNC('month', invoice_date)) AS active_months
-      FROM base_txn WHERE issuer_ruc = $4 AND ($5::text IS NULL OR store_id::text = $5)
+      FROM base_txn WHERE issuer_ruc = $4 -- store_id filter removed
     ),
     panel_market AS (SELECT SUM(line_total) AS spend_market_usd FROM base_txn WHERE user_id IN (SELECT DISTINCT user_id FROM base_txn WHERE issuer_ruc = $4))
     SELECT px.*, pm.spend_market_usd, ROUND(100.0 * px.spend_in_x_usd / NULLIF(pm.spend_market_usd, 0), 2) AS sow_pct,
       CASE WHEN px.customers_n > 0 THEN ROUND(px.spend_in_x_usd / px.customers_n, 2) ELSE 0 END AS avg_spend_per_customer
     FROM panel_x px CROSS JOIN panel_market pm
   `;
-  const panelResult = await pool.query(panelQuery, [startDate, endDate, reconcileOk, issuerRuc, storeId]);
+  const panelResult = await pool.query(panelQuery, [startDate, endDate, reconcileOk, issuerRuc]);
   const panelRow = panelResult.rows[0] || {};
   const expansion = getExpansionFactor(issuerRuc, null);
   const panel = {
@@ -1182,7 +1182,7 @@ app.get('/api/deck/commerce', asyncHandler(async (req, res) => {
     )
     SELECT month, COUNT(DISTINCT user_id) AS customers, SUM(spend) AS spend FROM base_txn GROUP BY month ORDER BY month
   `;
-  const trendResult = await pool.query(trendQuery, [startDate, endDate, reconcileOk, issuerRuc, storeId]);
+  const trendResult = await pool.query(trendQuery, [startDate, endDate, reconcileOk, issuerRuc]);
   const panelTrend = trendResult.rows.map(r => ({ month: r.month.toISOString().split('T')[0].substring(0, 7), customers: Number(r.customers), spend: Math.round(Number(r.spend)) }));
 
   // CAPTURE
