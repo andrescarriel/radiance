@@ -1,5 +1,5 @@
 // =============================================================================
-// RADIANCE API SERVER v2.1.0 — COMPLETE CONSOLIDATED
+// RADIANCE API SERVER v2.2.0 — COMPLETE CONSOLIDATED
 // =============================================================================
 // Sprints: 1-Capture, 2-Switching, 3-Leakage, 4-Basket, 5-Loyalty, 6-Panel, 7-Deck
 // DOD-67 Compliant: ≥8 charts, disclaimers, UNKNOWN handling, projections labeled
@@ -719,7 +719,7 @@ app.get('/api/retailers', asyncHandler(async (req, res) => {
     FROM analytics.radiance_base_v1 b
     WHERE b.issuer_ruc IS NOT NULL
     GROUP BY b.issuer_ruc, b.issuer_name
-    HAVING COUNT(DISTINCT b.user_id) >= 10
+    HAVING COUNT(DISTINCT b.user_id) >= 1
     ORDER BY invoices DESC
     LIMIT 50
   `;
