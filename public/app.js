@@ -231,7 +231,7 @@ const renderOverviewKPIs = (data) => {
   
   // Row 2
   $('#kpiFrecuencia').textContent = current.frecuencia?.toFixed(2) || '—';
-  $('#kpiProductos').textContent = formatNum(current.productos);
+$('#kpiMeses').textContent = formatNum(current.meses_activos || trends?.length || 0);
   $('#kpiCategorias').textContent = formatNum(current.categorias);
   $('#kpiSoW').textContent = formatPct(current.sow_pct);
 };
