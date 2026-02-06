@@ -22,6 +22,8 @@ const { Pool } = require('pg');
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(express.static('public'));
+
 
 // =============================================================================
 // DATABASE CONNECTION
@@ -111,7 +113,27 @@ function getCatCol(level) {
   return VALID_CAT_COLS[level] || null; 
 }
 
+// =============================================================================
+// HEALTH CHECK
+// =============================================================================
 
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    version: '2.0.0',
+    sprints: ['1-capture', '2-switching', '3-leakage', '4-basket', '5-loyalty', '6-panel', '7-deck'],
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/api/health', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT NOW() as time');
+    res.json({ status: 'healthy', db: 'connected', time: result.rows[0].time });
+  } catch (err) {
+    res.status(500).json({ status: 'unhealthy', db: 'error', error: err.message });
+  }
+});
 
 // =============================================================================
 // SPRINT 1: COMMERCE CAPTURE (SoW / Leakage by Category)
