@@ -80,9 +80,9 @@ const buildQuery = (filters) => {
 };
 
 // Fetch with error handling
-const fetchAPI = async (endpoint, filters = {}) => {
-  const query = buildQuery({ ...getFilters(), ...filters });
-  const url = `${API_BASE}${endpoint}?${query}`;
+const fetchAPI = async (endpoint, extraParams = {}) => {
+  const merged = { ...getFilters(), ...extraParams };
+  const url = `${endpoint}?${buildQuery(merged)}`;
   
   try {
     const res = await fetch(url);
@@ -128,16 +128,30 @@ const destroyChart = (id) => {
 
 // Create empty state
 const showEmptyState = (container, message = 'Sin datos para mostrar') => {
-  // Check if inside chart-body (use chart-empty) or elsewhere (use empty-state)
-  const isChartBody = container.classList.contains('chart-body');
-  const className = isChartBody ? 'chart-empty' : 'empty-state';
+  // Ocultar canvas en vez de destruirlo
+  const canvas = container.querySelector('canvas');
+  if (canvas) canvas.classList.add('hidden');
   
-  container.innerHTML = `
-    <div class="${className}">
-      ${isChartBody ? '' : '<div class="empty-state-icon">📭</div>'}
-      <div class="${isChartBody ? '' : 'empty-state-text'}">${message}</div>
-    </div>
-  `;
+  // Crear o actualizar empty state
+  let empty = container.querySelector('.empty-state');
+  if (!empty) {
+    empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = `
+      <div class="empty-state-icon">📭</div>
+      <div class="empty-state-text"></div>
+    `;
+    container.appendChild(empty);
+  }
+  empty.querySelector('.empty-state-text').textContent = message;
+  empty.classList.remove('hidden');
+};
+
+const clearEmptyState = (container) => {
+  const empty = container.querySelector('.empty-state');
+  if (empty) empty.classList.add('hidden');
+  const canvas = container.querySelector('canvas');
+  if (canvas) canvas.classList.remove('hidden');
 };
 
 // -----------------------------------------------------------------------------
@@ -472,6 +486,8 @@ const renderSwitchingTable = (data) => {
 // -----------------------------------------------------------------------------
 const loadLeakage = async () => {
   // First load categories for dropdown
+   const filters = getFilters();
+  if (!filters.issuer_ruc) return;  
   try {
     const captureData = await fetchAPI('/api/sow_leakage/by_category');
     populateCategorySelect('#leakageCategorySelect', captureData.data);
@@ -580,7 +596,10 @@ const renderBasketChart = (data) => {
 // LOYALTY MODULE
 // -----------------------------------------------------------------------------
 const loadLoyalty = async () => {
+	const filters = getFilters();
+  if (!filters.issuer_ruc) return;
   try {
+	  
     // Load categories
     const captureData = await fetchAPI('/api/sow_leakage/by_category');
     populateCategorySelect('#loyaltyCategorySelect', captureData.data);
@@ -779,15 +798,17 @@ const loadRetailers = async () => {
 // -----------------------------------------------------------------------------
 const loadCategories = async () => {
   const level = $('#filterCategoryLevel').value;
+  const type = $('#filterCategoryType').value;
   try {
-    const res = await fetch(`/api/categories?category_level=${level}`);
+    const res = await fetch(`/api/categories?category_level=${level}&type=${type}`);
     const data = await res.json();
     const select = $('#filterCategoryValue');
     select.innerHTML = '<option value="">Todas</option>';
     data.data.forEach(c => {
       const opt = document.createElement('option');
       opt.value = c.category_value;
-      opt.textContent = `${c.category_value} (${c.users.toLocaleString()})`;
+      const icon = c.category_type === 'commerce' ? '🏪' : '📦';
+      opt.textContent = `${icon} ${c.category_value} (${c.users.toLocaleString()})`;
       select.appendChild(opt);
     });
   } catch (e) {
@@ -795,8 +816,9 @@ const loadCategories = async () => {
   }
 };
 
-// Recargar categorías cuando cambia el nivel
+// Event listeners
 $('#filterCategoryLevel').addEventListener('change', loadCategories);
+$('#filterCategoryType').addEventListener('change', loadCategories);
 
 // -----------------------------------------------------------------------------
 // INIT
