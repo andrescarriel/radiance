@@ -1153,6 +1153,15 @@ app.get('/api/leakage/tree', asyncHandler(async (req, res) => {
       GROUP BY b.user_id, DATE_TRUNC('month', b.invoice_date)::date, b.issuer_ruc
     ),
     months AS (SELECT DISTINCT txn_month FROM base_txn ORDER BY txn_month),
+    month_pairs AS (SELECT txn_month AS origin, LEAD(txn_month) OVER (ORDER BY txn_month) AS next FROM months),
+    user_month AS (
+      SELECT user_id, txn_month,
+        SUM(CASE WHEN issuer_ruc = $4 THEN visits ELSE 0 END) AS visits_x,
+        SUM(CASE WHEN issuer_ruc = $4 THEN line_total ELSE 0 END) AS spend_x,
+        SUM(visits) AS visits_total
+      FROM base_txn GROUP BY user_id, txn_month
+    ),
+    cohort AS (SELECT user_id, txn_month AS origin FROM user_month WHERE visits_x > 0),
     transitions AS (
       SELECT c.user_id, c.origin, mp.next,
         COALESCE(um_o.visits_x, 0) AS vx_o, COALESCE(um_o.spend_x, 0) AS sx_o,
