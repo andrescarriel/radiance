@@ -986,7 +986,7 @@ app.get('/api/loyalty/brands', asyncHandler(async (req, res) => {
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
         AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
         AND b.issuer_ruc = $4 AND b.user_id IS NOT NULL AND COALESCE(b.${catCol}, 'UNKNOWN') = $5
-      GROUP BY b.user_id, brand
+      GROUP BY b.user_id, COALESCE(b.product_brand, 'UNKNOWN')
     ),
     user_cat_spend AS (SELECT user_id, SUM(brand_spend) AS cat_spend FROM base GROUP BY user_id),
     shares AS (
@@ -1315,14 +1315,16 @@ app.get('/api/deck/commerce', asyncHandler(async (req, res) => {
   const switchingResult = await pool.query(switchingQuery, [startDate, endDate, reconcileOk, issuerRuc, kThreshold]);
   const switching = { data: switchingResult.rows.map(r => ({ destination: r.destination, users: Number(r.users), pct: Number(r.pct) })) };
 
-  // AUTO-SELECT TOP CATEGORY
+ // AUTO-SELECT TOP CATEGORY
   const topCatQuery = `
     SELECT COALESCE(b.${catCol}, 'UNKNOWN') AS cat_val, SUM(COALESCE(b.line_total, 0)) AS spend
     FROM analytics.radiance_base_v1 b
     LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
     WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
       AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3) AND b.issuer_ruc = $4 AND b.user_id IS NOT NULL
-    GROUP BY COALESCE(b.${catCol}, 'UNKNOWN') HAVING COALESCE(b.${catCol}, 'UNKNOWN') NOT IN ('UNKNOWN', 'OTHER_SUPPRESSED') ORDER BY spend DESC LIMIT 1
+    GROUP BY COALESCE(b.${catCol}, 'UNKNOWN')
+    HAVING COALESCE(b.${catCol}, 'UNKNOWN') NOT IN ('UNKNOWN', 'OTHER_SUPPRESSED')
+    ORDER BY spend DESC LIMIT 1
   `;
   const topCatResult = await pool.query(topCatQuery, [startDate, endDate, reconcileOk, issuerRuc]);
   const topCategory = topCatResult.rows[0]?.cat_val || null;
@@ -1408,7 +1410,7 @@ app.get('/api/deck/commerce', asyncHandler(async (req, res) => {
         LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
         WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
           AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3) AND b.issuer_ruc = $4 AND b.user_id IS NOT NULL AND COALESCE(b.${catCol}, 'UNKNOWN') = $5
-        GROUP BY b.user_id, brand
+        GROUP BY b.user_id, COALESCE(b.product_brand, 'UNKNOWN')
       ),
       user_cat_spend AS (SELECT user_id, SUM(brand_spend) AS cat_spend FROM base GROUP BY user_id),
       shares AS (
