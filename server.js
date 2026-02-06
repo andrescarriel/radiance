@@ -851,6 +851,7 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
         AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
         AND b.issuer_ruc = $4
         AND b.user_id IS NOT NULL
+      GROUP BY b.user_id, b.cufe, b.invoice_date, COALESCE(b.${catCol}, 'UNKNOWN')
     ),
     kpis AS (
       SELECT
@@ -886,6 +887,7 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
         AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
         AND b.issuer_ruc = $4
         AND b.user_id IS NOT NULL
+		GROUP BY b.user_id, b.cufe
     )
     SELECT
       SUM(line_total) AS ventas,
