@@ -1,5 +1,5 @@
 // =============================================================================
-// RADIANCE API SERVER v2.2.0 — COMPLETE CONSOLIDATED
+// RADIANCE API SERVER v2.1.0 — COMPLETE CONSOLIDATED
 // =============================================================================
 // Sprints: 1-Capture, 2-Switching, 3-Leakage, 4-Basket, 5-Loyalty, 6-Panel, 7-Deck
 // DOD-67 Compliant: ≥8 charts, disclaimers, UNKNOWN handling, projections labeled
@@ -733,7 +733,33 @@ app.get('/api/retailers', asyncHandler(async (req, res) => {
     }))
   });
 }));
-
+// =============================================================================
+// CATEGORIES LIST
+// =============================================================================
+app.get('/api/categories', asyncHandler(async (req, res) => {
+  const categoryLevel = (req.query.category_level || 'l1').toLowerCase();
+  const catCol = VALID_CAT_COLS[categoryLevel] || 'category_l1';
+  
+  const query = `
+    SELECT DISTINCT COALESCE(b.${catCol}, 'UNKNOWN') AS category_value,
+      COUNT(DISTINCT b.user_id) AS users,
+      SUM(COALESCE(b.line_total, 0)) AS spend
+    FROM analytics.radiance_base_v1 b
+    WHERE b.${catCol} IS NOT NULL AND b.${catCol} != 'UNKNOWN'
+    GROUP BY COALESCE(b.${catCol}, 'UNKNOWN')
+    HAVING COUNT(DISTINCT b.user_id) >= 1
+    ORDER BY spend DESC
+    LIMIT 100
+  `;
+  const { rows } = await pool.query(query);
+  res.json({
+    data: rows.map(r => ({
+      category_value: r.category_value,
+      users: Number(r.users),
+      spend: Number(r.spend)
+    }))
+  });
+}));
 // =============================================================================
 // SPRINT 0: KPIs SUMMARY (Overview Dashboard)
 // =============================================================================
@@ -976,10 +1002,10 @@ app.get('/api/sow_leakage/by_category', asyncHandler(async (req, res) => {
       SUM(spend) AS spend_market_usd,
       SUM(spend) - SUM(CASE WHEN issuer_ruc = $4 THEN spend ELSE 0 END) AS leakage_usd,
       ROUND(100.0 * SUM(CASE WHEN issuer_ruc = $4 THEN spend ELSE 0 END) / NULLIF(SUM(spend), 0), 2) AS sow_pct
-    FROM user_cat GROUP BY category_value HAVING COUNT(DISTINCT user_id) >= $6
+    FROM user_cat GROUP BY category_value HAVING COUNT(DISTINCT user_id) >= $5
     ORDER BY spend_in_x_usd DESC
   `;
-  const { rows } = await pool.query(query, [startDate, endDate, reconcileOk, issuerRuc, storeId, kThreshold]);
+const { rows } = await pool.query(query, [startDate, endDate, reconcileOk, issuerRuc, kThreshold]);
 
   res.set('X-Query-Time-Ms', String(Date.now() - start));
   res.json({
