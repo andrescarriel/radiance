@@ -1,12 +1,15 @@
 // =============================================================================
-// RADIANCE DASHBOARD — APP.JS
+// RADIANCE DASHBOARD — APP.JS v2.2.0
+// Filter Contract v1 Compliant
 // =============================================================================
 
 // -----------------------------------------------------------------------------
 // GLOBALS & CONFIG
 // -----------------------------------------------------------------------------
-const API_BASE = '';  // Same origin
-let charts = {};      // Store Chart.js instances for cleanup
+const API_BASE = '';
+let charts = {};
+let abortController = null;  // For cancelling stale requests
+let childrenCache = {};      // Cache for category children
 
 // Chart.js defaults
 Chart.defaults.color = '#94a3b8';
@@ -14,7 +17,6 @@ Chart.defaults.borderColor = 'rgba(99, 102, 241, 0.1)';
 Chart.defaults.font.family = "'Inter', sans-serif";
 Chart.defaults.font.size = 11;
 
-// Colors
 const COLORS = {
   cyan: '#06b6d4',
   purple: '#8b5cf6',
@@ -25,6 +27,30 @@ const COLORS = {
   pink: '#ec4899',
   gray: '#64748b'
 };
+
+// -----------------------------------------------------------------------------
+// GLOBAL FILTERS STATE (Single Source of Truth)
+// -----------------------------------------------------------------------------
+const globalFilters = {
+  start: '2025-01-01',
+  end: '2025-07-01',
+  issuer_ruc: null,
+  reconcile_ok: 'all',        // 'all' | 'true' | 'false'
+  k_threshold: 5,
+  peer_scope: 'all',          // 'peers' | 'extended' | 'all'
+  category_domain: 'product', // 'product' | 'commerce'
+  category_level: 'l1',       // 'l1'..'l4'
+  
+  // Hierarchical filter (what user selected)
+  category_path: { l1: null, l2: null, l3: null, l4: null },
+  
+  // For category-specific endpoints
+  category_value: null,
+  brand: null
+};
+
+// Last applied filters (for filter echo comparison)
+let lastAppliedFilters = null;
 
 // -----------------------------------------------------------------------------
 // HELPERS
@@ -57,47 +83,281 @@ const formatDelta = (current, previous) => {
   };
 };
 
-// Get filter values
-const getFilters = () => {
+// -----------------------------------------------------------------------------
+// FILTER CONTRACT v1: Unified Params Builder
+// -----------------------------------------------------------------------------
+function syncFiltersFromUI() {
+  globalFilters.issuer_ruc = $('#filterIssuerRuc').value || null;
+  globalFilters.start = $('#filterStart').value;
+  globalFilters.end = $('#filterEnd').value;
+  globalFilters.category_level = $('#filterCategoryLevel').value;
+  globalFilters.category_domain = $('#filterCategoryDomain').value;
+  globalFilters.peer_scope = $('#filterPeerScope').value;
+  
   const reconcile = $('#filterReconcile').value;
-  return {
-    issuer_ruc: $('#filterIssuerRuc').value.trim(),
-    start: $('#filterStart').value,
-    end: $('#filterEnd').value,
-    category_level: $('#filterCategoryLevel').value,
-    reconcile_ok: reconcile === 'all' ? '' : reconcile,  // 'all' -> empty (backend treats as NULL)
-    k_threshold: $('#filterKThreshold').value
+  globalFilters.reconcile_ok = reconcile;
+  
+  globalFilters.k_threshold = parseInt($('#filterKThreshold').value) || 5;
+  
+  // Category path from dropdowns
+  globalFilters.category_path = {
+    l1: $('#filterCatL1')?.value || null,
+    l2: $('#filterCatL2')?.value || null,
+    l3: $('#filterCatL3')?.value || null,
+    l4: $('#filterCatL4')?.value || null
   };
-};
+}
 
-// Build query string
-const buildQuery = (filters) => {
-  const params = new URLSearchParams();
-  Object.entries(filters).forEach(([k, v]) => {
-    if (v !== '' && v != null) params.append(k, v);
-  });
-  return params.toString();
-};
+function buildParams(overrides = {}) {
+  const f = { ...globalFilters, ...overrides };
+  const p = new URLSearchParams();
 
-// Fetch with error handling
-const fetchAPI = async (endpoint, extraParams = {}) => {
-  const merged = { ...getFilters(), ...extraParams };
-  const url = `${endpoint}?${buildQuery(merged)}`;
+  // Required
+  p.set('start', f.start);
+  p.set('end', f.end);
+  if (f.issuer_ruc) p.set('issuer_ruc', f.issuer_ruc);
+
+  // Optional with defaults
+  if (f.reconcile_ok && f.reconcile_ok !== 'all') {
+    p.set('reconcile_ok', f.reconcile_ok);
+  }
+  
+  p.set('k_threshold', String(f.k_threshold ?? 5));
+  p.set('peer_scope', f.peer_scope ?? 'all');
+  p.set('category_domain', f.category_domain ?? 'product');
+  p.set('category_level', f.category_level ?? 'l1');
+
+  // Category path (send only defined levels)
+  const path = f.category_path || {};
+  if (path.l1) p.set('category_l1', path.l1);
+  if (path.l2) p.set('category_l2', path.l2);
+  if (path.l3) p.set('category_l3', path.l3);
+  if (path.l4) p.set('category_l4', path.l4);
+
+  // Category value (for leakage/loyalty)
+  if (f.category_value) p.set('category_value', f.category_value);
+  
+  // Brand filter
+  if (f.brand) p.set('brand', f.brand);
+
+  return p.toString();
+}
+
+// -----------------------------------------------------------------------------
+// FETCH WITH ABORT CONTROLLER (Anti-stale)
+// -----------------------------------------------------------------------------
+async function fetchAPI(endpoint, extraParams = {}) {
+  const params = buildParams(extraParams);
+  const url = `${API_BASE}${endpoint}?${params}`;
   
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { 
+      signal: abortController?.signal 
+    });
+    
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.message || `HTTP ${res.status}`);
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || err.error || `HTTP ${res.status}`);
     }
-    return await res.json();
+    
+    const data = await res.json();
+    
+    // Process filter echo from backend
+    if (data.filters) {
+      processFilterEcho(data.filters);
+    }
+    
+    return data;
   } catch (e) {
+    if (e.name === 'AbortError') {
+      console.log('Request aborted (stale)');
+      return null;
+    }
     showToast(`Error: ${e.message}`, 'error');
     throw e;
   }
-};
+}
 
-// Toast notifications
+// Resilient fetch for multiple endpoints
+async function fetchDashboard(endpoints) {
+  // Cancel any pending requests
+  if (abortController) {
+    abortController.abort();
+  }
+  abortController = new AbortController();
+  
+  const results = await Promise.allSettled(
+    endpoints.map(ep => fetchAPI(ep.url, ep.params || {}))
+  );
+  
+  return results.map((result, i) => ({
+    endpoint: endpoints[i].url,
+    status: result.status,
+    data: result.status === 'fulfilled' ? result.value : null,
+    error: result.status === 'rejected' ? result.reason : null
+  }));
+}
+
+// -----------------------------------------------------------------------------
+// FILTER ECHO PROCESSING
+// -----------------------------------------------------------------------------
+function processFilterEcho(backendFilters) {
+  if (!backendFilters) return;
+  
+  const { applied, ignored, defaults } = backendFilters;
+  
+  // Update status strip with actual applied values
+  if (applied) {
+    $('#statusKThreshold').textContent = applied.k_threshold ?? defaults?.k_threshold ?? 5;
+    $('#statusReconcile').textContent = applied.reconcile_ok === null ? 'All' : applied.reconcile_ok;
+    $('#statusPeerScope').textContent = applied.peer_scope ?? 'all';
+  }
+  
+  // Show ignored filters as warning
+  if (ignored && ignored.length > 0) {
+    console.log('Ignored filters:', ignored);
+    // Could show a subtle indicator in UI
+  }
+}
+
+// -----------------------------------------------------------------------------
+// HIERARCHICAL CATEGORY DROPDOWNS
+// -----------------------------------------------------------------------------
+async function fetchCategoryChildren(level, parentPath) {
+  const cacheKey = `${level}:${JSON.stringify(parentPath)}`;
+  
+  if (childrenCache[cacheKey]) {
+    return childrenCache[cacheKey];
+  }
+  
+  const params = {
+    start: globalFilters.start,
+    end: globalFilters.end,
+    level: level,
+    domain: globalFilters.category_domain
+  };
+  
+  // Add parent path
+  if (parentPath.l1) params.category_l1 = parentPath.l1;
+  if (parentPath.l2) params.category_l2 = parentPath.l2;
+  if (parentPath.l3) params.category_l3 = parentPath.l3;
+  
+  if (globalFilters.issuer_ruc) {
+    params.issuer_ruc = globalFilters.issuer_ruc;
+  }
+  
+  try {
+    const queryStr = new URLSearchParams(params).toString();
+    const res = await fetch(`/api/categories/children?${queryStr}`);
+    const data = await res.json();
+    
+    childrenCache[cacheKey] = data.data || [];
+    return childrenCache[cacheKey];
+  } catch (e) {
+    console.error('Error fetching children:', e);
+    return [];
+  }
+}
+
+async function populateCategoryDropdown(selectId, level, parentPath) {
+  const select = $(selectId);
+  if (!select) return;
+  
+  select.innerHTML = '<option value="">Cargando...</option>';
+  select.disabled = true;
+  
+  const children = await fetchCategoryChildren(level, parentPath);
+  
+  select.innerHTML = '<option value="">Todas</option>';
+  children.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.category_value;
+    const icon = c.is_unknown ? '❓' : (globalFilters.category_domain === 'commerce' ? '🏪' : '📦');
+    opt.textContent = `${icon} ${c.category_value} (${formatNum(c.users)})`;
+    if (c.is_unknown) opt.classList.add('suppressed');
+    select.appendChild(opt);
+  });
+  
+  select.disabled = false;
+}
+
+function initCategoryHierarchy() {
+  // L1 change -> reset L2, L3, L4 and load L2 children
+  $('#filterCatL1')?.addEventListener('change', async (e) => {
+    const val = e.target.value;
+    globalFilters.category_path.l1 = val || null;
+    globalFilters.category_path.l2 = null;
+    globalFilters.category_path.l3 = null;
+    globalFilters.category_path.l4 = null;
+    
+    // Reset downstream dropdowns
+    if ($('#filterCatL2')) $('#filterCatL2').innerHTML = '<option value="">—</option>';
+    if ($('#filterCatL3')) $('#filterCatL3').innerHTML = '<option value="">—</option>';
+    if ($('#filterCatL4')) $('#filterCatL4').innerHTML = '<option value="">—</option>';
+    
+    if (val) {
+      await populateCategoryDropdown('#filterCatL2', 'l2', { l1: val });
+    }
+  });
+  
+  // L2 change -> reset L3, L4 and load L3 children
+  $('#filterCatL2')?.addEventListener('change', async (e) => {
+    const val = e.target.value;
+    globalFilters.category_path.l2 = val || null;
+    globalFilters.category_path.l3 = null;
+    globalFilters.category_path.l4 = null;
+    
+    if ($('#filterCatL3')) $('#filterCatL3').innerHTML = '<option value="">—</option>';
+    if ($('#filterCatL4')) $('#filterCatL4').innerHTML = '<option value="">—</option>';
+    
+    if (val) {
+      await populateCategoryDropdown('#filterCatL3', 'l3', { 
+        l1: globalFilters.category_path.l1, 
+        l2: val 
+      });
+    }
+  });
+  
+  // L3 change -> reset L4 and load L4 children
+  $('#filterCatL3')?.addEventListener('change', async (e) => {
+    const val = e.target.value;
+    globalFilters.category_path.l3 = val || null;
+    globalFilters.category_path.l4 = null;
+    
+    if ($('#filterCatL4')) $('#filterCatL4').innerHTML = '<option value="">—</option>';
+    
+    if (val) {
+      await populateCategoryDropdown('#filterCatL4', 'l4', { 
+        l1: globalFilters.category_path.l1, 
+        l2: globalFilters.category_path.l2,
+        l3: val 
+      });
+    }
+  });
+  
+  // L4 change
+  $('#filterCatL4')?.addEventListener('change', (e) => {
+    globalFilters.category_path.l4 = e.target.value || null;
+  });
+  
+  // Domain change -> reset all and reload L1
+  $('#filterCategoryDomain')?.addEventListener('change', async (e) => {
+    globalFilters.category_domain = e.target.value;
+    globalFilters.category_path = { l1: null, l2: null, l3: null, l4: null };
+    childrenCache = {}; // Clear cache on domain change
+    
+    // Reset all dropdowns
+    ['#filterCatL1', '#filterCatL2', '#filterCatL3', '#filterCatL4'].forEach(sel => {
+      if ($(sel)) $(sel).innerHTML = '<option value="">—</option>';
+    });
+    
+    await populateCategoryDropdown('#filterCatL1', 'l1', {});
+  });
+}
+
+// -----------------------------------------------------------------------------
+// TOAST & LOADING
+// -----------------------------------------------------------------------------
 const showToast = (message, type = 'error') => {
   const container = $('#toastContainer');
   const toast = document.createElement('div');
@@ -107,18 +367,19 @@ const showToast = (message, type = 'error') => {
   setTimeout(() => toast.remove(), 5000);
 };
 
-// Loading state
 const showLoading = () => {
-  $('#loadingOverlay').classList.remove('hidden');
+  $('#loadingOverlay')?.classList.remove('hidden');
   $('#btnApplyFilters').disabled = true;
 };
 
 const hideLoading = () => {
-  $('#loadingOverlay').classList.add('hidden');
+  $('#loadingOverlay')?.classList.add('hidden');
   $('#btnApplyFilters').disabled = false;
 };
 
-// Destroy chart if exists
+// -----------------------------------------------------------------------------
+// CHART HELPERS
+// -----------------------------------------------------------------------------
 const destroyChart = (id) => {
   if (charts[id]) {
     charts[id].destroy();
@@ -126,13 +387,10 @@ const destroyChart = (id) => {
   }
 };
 
-// Create empty state
 const showEmptyState = (container, message = 'Sin datos para mostrar') => {
-  // Ocultar canvas en vez de destruirlo
   const canvas = container.querySelector('canvas');
   if (canvas) canvas.classList.add('hidden');
   
-  // Crear o actualizar empty state
   let empty = container.querySelector('.empty-state');
   if (!empty) {
     empty = document.createElement('div');
@@ -162,15 +420,12 @@ const initNavigation = () => {
     item.addEventListener('click', () => {
       const module = item.dataset.module;
       
-      // Update nav active state
       $$('.nav-item').forEach(n => n.classList.remove('active'));
       item.classList.add('active');
       
-      // Show/hide modules
       $$('.module').forEach(m => m.classList.add('hidden'));
-      $(`#module${capitalize(module)}`).classList.remove('hidden');
+      $(`#module${capitalize(module)}`)?.classList.remove('hidden');
       
-      // Load module data
       loadModule(module);
     });
   });
@@ -182,9 +437,10 @@ const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 // MODULE LOADERS
 // -----------------------------------------------------------------------------
 const loadModule = async (module) => {
-  const filters = getFilters();
-  if (!filters.issuer_ruc) {
-    showToast('Ingresa un issuer_ruc', 'error');
+  syncFiltersFromUI();
+  
+  if (!globalFilters.issuer_ruc) {
+    showToast('Selecciona un comercio', 'warning');
     return;
   }
 
@@ -212,6 +468,8 @@ const loadModule = async (module) => {
 const loadOverview = async () => {
   try {
     const data = await fetchAPI('/api/kpis/summary');
+    if (!data) return; // Aborted
+    
     renderOverviewKPIs(data);
     renderOverviewCharts(data);
   } catch (e) {
@@ -222,30 +480,17 @@ const loadOverview = async () => {
 const renderOverviewKPIs = (data) => {
   const { current, previous } = data;
   
-  // Row 1
   $('#kpiVentas').textContent = formatUSD(current.ventas);
   const ventasDelta = formatDelta(current.ventas, previous?.ventas);
   $('#kpiVentasDelta').textContent = ventasDelta.text;
   $('#kpiVentasDelta').className = `kpi-delta ${ventasDelta.class}`;
   
   $('#kpiTxn').textContent = formatNum(current.transacciones);
-  const txnDelta = formatDelta(current.transacciones, previous?.transacciones);
-  $('#kpiTxnDelta').textContent = txnDelta.text;
-  $('#kpiTxnDelta').className = `kpi-delta ${txnDelta.class}`;
-  
   $('#kpiClientes').textContent = formatNum(current.clientes);
-  const clientesDelta = formatDelta(current.clientes, previous?.clientes);
-  $('#kpiClientesDelta').textContent = clientesDelta.text;
-  $('#kpiClientesDelta').className = `kpi-delta ${clientesDelta.class}`;
-  
   $('#kpiTicket').textContent = formatUSD(current.ticket_promedio);
-  const ticketDelta = formatDelta(current.ticket_promedio, previous?.ticket_promedio);
-  $('#kpiTicketDelta').textContent = ticketDelta.text;
-  $('#kpiTicketDelta').className = `kpi-delta ${ticketDelta.class}`;
   
-  // Row 2
-  $('#kpiFrecuencia').textContent = current.frecuencia?.toFixed(2) || '—';
-$('#kpiMeses').textContent = formatNum(current.meses_activos || trends?.length || 0);
+  $('#kpiFreq').textContent = current.frecuencia?.toFixed(2) || '—';
+  $('#kpiMeses').textContent = formatNum(data.trends?.length || 0);
   $('#kpiCategorias').textContent = formatNum(current.categorias);
   $('#kpiSoW').textContent = formatPct(current.sow_pct);
 };
@@ -257,6 +502,7 @@ const renderOverviewCharts = (data) => {
   destroyChart('chartVentasMes');
   const ctxVentas = $('#chartVentasMes');
   if (trends?.length > 0) {
+    clearEmptyState(ctxVentas.parentElement);
     charts['chartVentasMes'] = new Chart(ctxVentas, {
       type: 'line',
       data: {
@@ -280,6 +526,7 @@ const renderOverviewCharts = (data) => {
   destroyChart('chartClientesMes');
   const ctxClientes = $('#chartClientesMes');
   if (trends?.length > 0) {
+    clearEmptyState(ctxClientes.parentElement);
     charts['chartClientesMes'] = new Chart(ctxClientes, {
       type: 'line',
       data: {
@@ -303,6 +550,7 @@ const renderOverviewCharts = (data) => {
   destroyChart('chartTxnDia');
   const ctxDia = $('#chartTxnDia');
   if (by_weekday?.length > 0) {
+    clearEmptyState(ctxDia.parentElement);
     charts['chartTxnDia'] = new Chart(ctxDia, {
       type: 'bar',
       data: {
@@ -324,6 +572,7 @@ const renderOverviewCharts = (data) => {
   destroyChart('chartTopCategorias');
   const ctxCat = $('#chartTopCategorias');
   if (top_categories?.length > 0) {
+    clearEmptyState(ctxCat.parentElement);
     charts['chartTopCategorias'] = new Chart(ctxCat, {
       type: 'bar',
       data: {
@@ -331,7 +580,7 @@ const renderOverviewCharts = (data) => {
         datasets: [{
           label: 'Ventas',
           data: top_categories.map(c => c.ventas),
-          backgroundColor: COLORS.cyan,
+          backgroundColor: top_categories.map(c => c.is_unknown ? COLORS.gray : COLORS.cyan),
           borderRadius: 4
         }]
       },
@@ -352,6 +601,8 @@ const renderOverviewCharts = (data) => {
 const loadCapture = async () => {
   try {
     const data = await fetchAPI('/api/sow_leakage/by_category');
+    if (!data) return;
+    
     renderCaptureKPIs(data);
     renderCaptureCharts(data);
     renderCaptureTable(data);
@@ -378,10 +629,10 @@ const renderCaptureKPIs = (data) => {
 const renderCaptureCharts = (data) => {
   const rows = data.data.slice(0, 10);
   
-  // SoW Chart
   destroyChart('chartCaptureSoW');
   const ctxSoW = $('#chartCaptureSoW');
   if (rows.length > 0) {
+    clearEmptyState(ctxSoW.parentElement);
     charts['chartCaptureSoW'] = new Chart(ctxSoW, {
       type: 'bar',
       data: {
@@ -389,7 +640,7 @@ const renderCaptureCharts = (data) => {
         datasets: [{
           label: 'SoW %',
           data: rows.map(r => r.sow_pct),
-          backgroundColor: COLORS.cyan,
+          backgroundColor: rows.map(r => r.is_unknown ? COLORS.gray : COLORS.cyan),
           borderRadius: 4
         }]
       },
@@ -399,10 +650,10 @@ const renderCaptureCharts = (data) => {
     showEmptyState(ctxSoW.parentElement);
   }
   
-  // Stacked Chart
   destroyChart('chartCaptureStacked');
   const ctxStacked = $('#chartCaptureStacked');
   if (rows.length > 0) {
+    clearEmptyState(ctxStacked.parentElement);
     charts['chartCaptureStacked'] = new Chart(ctxStacked, {
       type: 'bar',
       data: {
@@ -422,8 +673,8 @@ const renderCaptureCharts = (data) => {
 const renderCaptureTable = (data) => {
   const tbody = $('#tableCaptureDetail tbody');
   tbody.innerHTML = data.data.map(r => `
-    <tr>
-      <td class="${r.category_value === 'UNKNOWN' ? 'suppressed' : ''}">${r.category_value}</td>
+    <tr class="${r.is_unknown ? 'row-suppressed' : ''}">
+      <td class="${r.is_unknown ? 'suppressed' : ''}">${r.category_value}${r.is_unknown ? ' ⚠️' : ''}</td>
       <td class="text-right mono">${formatNum(r.users)}</td>
       <td class="text-right mono">${formatUSD(r.spend_in_x_usd)}</td>
       <td class="text-right mono">${formatUSD(r.spend_market_usd)}</td>
@@ -439,6 +690,8 @@ const renderCaptureTable = (data) => {
 const loadSwitching = async () => {
   try {
     const data = await fetchAPI('/api/switching/destinations');
+    if (!data) return;
+    
     renderSwitchingChart(data);
     renderSwitchingTable(data);
   } catch (e) {
@@ -449,16 +702,16 @@ const loadSwitching = async () => {
 const renderSwitchingChart = (data) => {
   destroyChart('chartSwitching');
   const ctx = $('#chartSwitching');
-  const rows = data.data.slice(0, 10);
   
-  if (rows.length > 0) {
+  if (data.data?.length > 0) {
+    clearEmptyState(ctx.parentElement);
     charts['chartSwitching'] = new Chart(ctx, {
       type: 'bar',
       data: {
-        labels: rows.map(r => r.destination.substring(0, 20)),
+        labels: data.data.map(r => r.destination.substring(0, 20)),
         datasets: [{
           label: '% Cohort',
-          data: rows.map(r => r.pct),
+          data: data.data.map(r => r.pct),
           backgroundColor: COLORS.pink,
           borderRadius: 4
         }]
@@ -485,63 +738,55 @@ const renderSwitchingTable = (data) => {
 // LEAKAGE MODULE
 // -----------------------------------------------------------------------------
 const loadLeakage = async () => {
-  // First load categories for dropdown
-   const filters = getFilters();
-  if (!filters.issuer_ruc) return;  
   try {
+    // Load categories for dropdown
     const captureData = await fetchAPI('/api/sow_leakage/by_category');
-    populateCategorySelect('#leakageCategorySelect', captureData.data);
+    if (!captureData) return;
     
-    // Load leakage if category selected
+    populateCategoryValueSelect('#leakageCategorySelect', captureData.data);
+    
     const category = $('#leakageCategorySelect').value;
     if (category) {
       const data = await fetchAPI('/api/leakage/tree', { category_value: category });
-      renderLeakageChart(data);
+      if (data) renderLeakageChart(data);
     }
   } catch (e) {
     console.error('Leakage error:', e);
   }
 };
 
-const populateCategorySelect = (selector, categories) => {
-  const select = $(selector);
-  const current = select.value;
-  select.innerHTML = '<option value="">Selecciona categoría...</option>';
-  
-  categories
-    .filter(c => c.category_value !== 'UNKNOWN' && c.category_value !== 'OTHER_SUPPRESSED')
-    .forEach(c => {
-      const opt = document.createElement('option');
-      opt.value = c.category_value;
-      opt.textContent = c.category_value;
-      select.appendChild(opt);
-    });
-  
-  if (current) select.value = current;
-};
-
 const renderLeakageChart = (data) => {
   destroyChart('chartLeakage');
   const ctx = $('#chartLeakage');
-  const waterfall = data.waterfall;
   
-  if (waterfall?.some(w => w.pct > 0)) {
-    const colors = [COLORS.green, COLORS.yellow, COLORS.orange, COLORS.orange, COLORS.red, COLORS.gray];
+  const hasData = data.waterfall?.some(b => b.users > 0);
+  
+  if (hasData) {
+    clearEmptyState(ctx.parentElement);
+    const bucketColors = {
+      'RETAINED': COLORS.green,
+      'CATEGORY_GONE': COLORS.yellow,
+      'REDUCED_BASKET': COLORS.orange,
+      'REDUCED_FREQ': COLORS.orange,
+      'DELAYED_ONLY': COLORS.red,
+      'FULL_CHURN': COLORS.gray
+    };
+    
     charts['chartLeakage'] = new Chart(ctx, {
       type: 'bar',
       data: {
-        labels: waterfall.map(w => w.bucket.replace('_', '\n')),
+        labels: data.waterfall.map(b => b.bucket),
         datasets: [{
-          label: '% Cohort',
-          data: waterfall.map(w => w.pct),
-          backgroundColor: colors,
+          label: '% Cohorte',
+          data: data.waterfall.map(b => b.pct),
+          backgroundColor: data.waterfall.map(b => bucketColors[b.bucket] || COLORS.gray),
           borderRadius: 4
         }]
       },
       options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { max: 100 } } }
     });
   } else {
-    showEmptyState(ctx.parentElement, 'Sin datos de leakage para esta categoría');
+    showEmptyState(ctx.parentElement, 'Sin datos de transiciones para esta categoría');
   }
 };
 
@@ -551,6 +796,8 @@ const renderLeakageChart = (data) => {
 const loadBasket = async () => {
   try {
     const data = await fetchAPI('/api/basket/breadth');
+    if (!data) return;
+    
     renderBasketKPIs(data);
     renderBasketChart(data);
   } catch (e) {
@@ -559,11 +806,10 @@ const loadBasket = async () => {
 };
 
 const renderBasketKPIs = (data) => {
-  if (data.data.length > 0) {
-    const avgMarket = data.data.reduce((sum, d) => sum + d.avg_breadth_market, 0) / data.data.length;
-    const avgInX = data.data.reduce((sum, d) => sum + d.avg_breadth_in_x, 0) / data.data.length;
-    $('#basketBreadthMarket').textContent = avgMarket.toFixed(2);
-    $('#basketBreadthInX').textContent = avgInX.toFixed(2);
+  if (data.data?.length > 0) {
+    const avg = arr => arr.reduce((a, b) => a + b, 0) / arr.length;
+    $('#basketBreadthMarket').textContent = avg(data.data.map(d => d.avg_breadth_market)).toFixed(2);
+    $('#basketBreadthInX').textContent = avg(data.data.map(d => d.avg_breadth_in_x)).toFixed(2);
   } else {
     $('#basketBreadthMarket').textContent = '—';
     $('#basketBreadthInX').textContent = '—';
@@ -573,16 +819,16 @@ const renderBasketKPIs = (data) => {
 const renderBasketChart = (data) => {
   destroyChart('chartBasket');
   const ctx = $('#chartBasket');
-  const rows = data.data;
   
-  if (rows.length > 0) {
+  if (data.data?.length > 0) {
+    clearEmptyState(ctx.parentElement);
     charts['chartBasket'] = new Chart(ctx, {
       type: 'bar',
       data: {
-        labels: rows.map(r => r.origin_month),
+        labels: data.data.map(d => d.origin_month),
         datasets: [
-          { label: 'Market', data: rows.map(r => r.avg_breadth_market), backgroundColor: COLORS.gray, borderRadius: 4 },
-          { label: 'In-X', data: rows.map(r => r.avg_breadth_in_x), backgroundColor: COLORS.cyan, borderRadius: 4 }
+          { label: 'Market', data: data.data.map(d => d.avg_breadth_market), backgroundColor: COLORS.gray, borderRadius: 4 },
+          { label: 'In-X', data: data.data.map(d => d.avg_breadth_in_x), backgroundColor: COLORS.cyan, borderRadius: 4 }
         ]
       },
       options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
@@ -596,20 +842,20 @@ const renderBasketChart = (data) => {
 // LOYALTY MODULE
 // -----------------------------------------------------------------------------
 const loadLoyalty = async () => {
-	const filters = getFilters();
-  if (!filters.issuer_ruc) return;
   try {
-	  
-    // Load categories
     const captureData = await fetchAPI('/api/sow_leakage/by_category');
-    populateCategorySelect('#loyaltyCategorySelect', captureData.data);
+    if (!captureData) return;
+    
+    populateCategoryValueSelect('#loyaltyCategorySelect', captureData.data);
     
     const category = $('#loyaltyCategorySelect').value;
     if (category) {
       const data = await fetchAPI('/api/loyalty/brands', { category_value: category });
-      renderLoyaltyKPIs(data);
-      renderLoyaltyCharts(data);
-      renderLoyaltyTable(data);
+      if (data) {
+        renderLoyaltyKPIs(data);
+        renderLoyaltyCharts(data);
+        renderLoyaltyTable(data);
+      }
     }
   } catch (e) {
     console.error('Loyalty error:', e);
@@ -628,10 +874,10 @@ const renderLoyaltyCharts = (data) => {
   const tiers = data.tiers || {};
   const dist = data.distribution || {};
   
-  // Tiers Donut
   destroyChart('chartLoyaltyTiers');
   const ctxTiers = $('#chartLoyaltyTiers');
   if (Object.values(tiers).some(v => v > 0)) {
+    clearEmptyState(ctxTiers.parentElement);
     charts['chartLoyaltyTiers'] = new Chart(ctxTiers, {
       type: 'doughnut',
       data: {
@@ -648,10 +894,10 @@ const renderLoyaltyCharts = (data) => {
     showEmptyState(ctxTiers.parentElement);
   }
   
-  // Distribution Bar
   destroyChart('chartLoyaltyDist');
   const ctxDist = $('#chartLoyaltyDist');
   if (Object.values(dist).some(v => v > 0)) {
+    clearEmptyState(ctxDist.parentElement);
     charts['chartLoyaltyDist'] = new Chart(ctxDist, {
       type: 'bar',
       data: {
@@ -675,8 +921,8 @@ const renderLoyaltyTable = (data) => {
   tbody.innerHTML = data.data
     .filter(r => r.brand !== 'OTHER_SUPPRESSED')
     .map(r => `
-    <tr>
-      <td class="${r.brand === 'UNKNOWN' ? 'suppressed' : ''}">${r.brand}</td>
+    <tr class="${r.is_unknown ? 'row-suppressed' : ''}">
+      <td class="${r.is_unknown ? 'suppressed' : ''}">${r.brand}${r.is_unknown ? ' ⚠️' : ''}</td>
       <td class="text-right mono">${formatNum(r.brand_buyers)}</td>
       <td class="text-right mono">${formatPct(r.penetration_pct)}</td>
       <td class="text-right mono">${formatPct(r.p75)}</td>
@@ -686,36 +932,80 @@ const renderLoyaltyTable = (data) => {
 };
 
 // -----------------------------------------------------------------------------
+// CATEGORY SELECT HELPERS
+// -----------------------------------------------------------------------------
+function populateCategoryValueSelect(selectId, data) {
+  const select = $(selectId);
+  if (!select) return;
+  
+  const currentVal = select.value;
+  select.innerHTML = '<option value="">Selecciona categoría...</option>';
+  
+  data.filter(r => !r.is_unknown).forEach(r => {
+    const opt = document.createElement('option');
+    opt.value = r.category_value;
+    opt.textContent = `${r.category_value} (${formatNum(r.users)} users)`;
+    select.appendChild(opt);
+  });
+  
+  // Restore previous selection if still valid
+  if (currentVal && select.querySelector(`option[value="${currentVal}"]`)) {
+    select.value = currentVal;
+  } else if (data.length > 0) {
+    // Auto-select first non-unknown
+    const first = data.find(r => !r.is_unknown);
+    if (first) select.value = first.category_value;
+  }
+}
+
+// -----------------------------------------------------------------------------
 // EVENT LISTENERS
 // -----------------------------------------------------------------------------
 const initEventListeners = () => {
-  // Apply filters button
+  // Apply filters
   $('#btnApplyFilters').addEventListener('click', () => {
-    const activeModule = $('.nav-item.active')?.dataset.module || 'overview';
+    syncFiltersFromUI();
     updateFilterStatus();
+    const activeModule = $('.nav-item.active')?.dataset.module || 'overview';
     loadModule(activeModule);
   });
   
-  // Reset filters button
+  // Reset filters
   $('#btnResetFilters').addEventListener('click', () => {
     $('#filterIssuerRuc').value = '';
     $('#filterStart').value = '2025-01-01';
     $('#filterEnd').value = '2025-07-01';
     $('#filterCategoryLevel').value = 'l1';
+    $('#filterCategoryDomain').value = 'product';
+    $('#filterPeerScope').value = 'all';
     $('#filterReconcile').value = 'all';
     $('#filterKThreshold').value = '5';
+    
+    // Reset category path dropdowns
+    ['#filterCatL1', '#filterCatL2', '#filterCatL3', '#filterCatL4'].forEach(sel => {
+      if ($(sel)) $(sel).value = '';
+    });
+    
+    // Reset global state
+    Object.assign(globalFilters, {
+      issuer_ruc: null,
+      start: '2025-01-01',
+      end: '2025-07-01',
+      category_level: 'l1',
+      category_domain: 'product',
+      peer_scope: 'all',
+      reconcile_ok: 'all',
+      k_threshold: 5,
+      category_path: { l1: null, l2: null, l3: null, l4: null }
+    });
+    
+    childrenCache = {};
     updateFilterStatus();
   });
   
-  // Export Deck button
-  $('#btnExportDeck').addEventListener('click', () => {
-    const filters = getFilters();
-    if (!filters.issuer_ruc) {
-      showToast('Ingresa un issuer_ruc', 'error');
-      return;
-    }
-    const params = buildQuery(filters);
-    window.open(`/api/deck/commerce?${params}`, '_blank');
+  // Export Deck (disabled - endpoint removed)
+  $('#btnExportDeck')?.addEventListener('click', () => {
+    showToast('Export Deck temporalmente deshabilitado', 'warning');
   });
   
   // Leakage category change
@@ -724,7 +1014,7 @@ const initEventListeners = () => {
       showLoading();
       try {
         const data = await fetchAPI('/api/leakage/tree', { category_value: e.target.value });
-        renderLeakageChart(data);
+        if (data) renderLeakageChart(data);
       } finally {
         hideLoading();
       }
@@ -737,9 +1027,11 @@ const initEventListeners = () => {
       showLoading();
       try {
         const data = await fetchAPI('/api/loyalty/brands', { category_value: e.target.value });
-        renderLoyaltyKPIs(data);
-        renderLoyaltyCharts(data);
-        renderLoyaltyTable(data);
+        if (data) {
+          renderLoyaltyKPIs(data);
+          renderLoyaltyCharts(data);
+          renderLoyaltyTable(data);
+        }
       } finally {
         hideLoading();
       }
@@ -756,20 +1048,11 @@ const initEventListeners = () => {
 
 // Update filter status strip
 const updateFilterStatus = () => {
-  const reconcile = $('#filterReconcile').value;
-  $('#statusKThreshold').textContent = $('#filterKThreshold').value || '5';
-  $('#statusReconcile').textContent = reconcile === 'all' ? 'All' : reconcile;
-};
-
-// Show/hide global banner
-const showBanner = (message, type = 'error') => {
-  const banner = $('#globalBanner');
-  banner.textContent = message;
-  banner.className = `global-banner ${type === 'warning' ? 'warning' : ''}`;
-};
-
-const hideBanner = () => {
-  $('#globalBanner').classList.add('hidden');
+  $('#statusKThreshold').textContent = globalFilters.k_threshold || '5';
+  $('#statusReconcile').textContent = globalFilters.reconcile_ok === 'all' ? 'All' : globalFilters.reconcile_ok;
+  if ($('#statusPeerScope')) {
+    $('#statusPeerScope').textContent = globalFilters.peer_scope || 'all';
+  }
 };
 
 // -----------------------------------------------------------------------------
@@ -780,7 +1063,7 @@ const loadRetailers = async () => {
     const res = await fetch('/api/retailers');
     const data = await res.json();
     const select = $('#filterIssuerRuc');
-    select.innerHTML = '<option value="">Selecciona retailer...</option>';
+    select.innerHTML = '<option value="">Selecciona comercio...</option>';
     data.data.forEach(r => {
       const opt = document.createElement('option');
       opt.value = r.issuer_ruc;
@@ -789,51 +1072,28 @@ const loadRetailers = async () => {
     });
   } catch (e) {
     console.error('Error loading retailers:', e);
-    $('#filterIssuerRuc').innerHTML = '<option value="">Error cargando retailers</option>';
+    $('#filterIssuerRuc').innerHTML = '<option value="">Error cargando</option>';
   }
 };
-
-// -----------------------------------------------------------------------------
-// LOAD CATEGORIES
-// -----------------------------------------------------------------------------
-const loadCategories = async () => {
-  const level = $('#filterCategoryLevel').value;
-  const type = $('#filterCategoryType').value;
-  try {
-    const res = await fetch(`/api/categories?category_level=${level}&type=${type}`);
-    const data = await res.json();
-    const select = $('#filterCategoryValue');
-    select.innerHTML = '<option value="">Todas</option>';
-    data.data.forEach(c => {
-      const opt = document.createElement('option');
-      opt.value = c.category_value;
-      const icon = c.category_type === 'commerce' ? '🏪' : '📦';
-      opt.textContent = `${icon} ${c.category_value} (${c.users.toLocaleString()})`;
-      select.appendChild(opt);
-    });
-  } catch (e) {
-    console.error('Error loading categories:', e);
-  }
-};
-
-// Event listeners
-$('#filterCategoryLevel').addEventListener('change', loadCategories);
-$('#filterCategoryType').addEventListener('change', loadCategories);
 
 // -----------------------------------------------------------------------------
 // INIT
 // -----------------------------------------------------------------------------
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   initNavigation();
   initEventListeners();
-  loadRetailers();
-loadCategories();  
-  // Check for issuer_ruc and auto-load
+  initCategoryHierarchy();
+  
+  await loadRetailers();
+  await populateCategoryDropdown('#filterCatL1', 'l1', {});
+  
+  // Check URL params for auto-load
   const params = new URLSearchParams(window.location.search);
   if (params.get('issuer_ruc')) {
     $('#filterIssuerRuc').value = params.get('issuer_ruc');
     if (params.get('start')) $('#filterStart').value = params.get('start');
     if (params.get('end')) $('#filterEnd').value = params.get('end');
+    syncFiltersFromUI();
     loadModule('overview');
   }
 });
