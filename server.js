@@ -242,7 +242,8 @@ function parseFilters(req, options = {}) {
       category_domain: categoryDomain,
       category_value: categoryValue,
       peer_scope: peerScope,
-      product_path: productPath
+      product_path: productPath,
+	  category_path: productPath  
     },
     derived: {
       cat_col: catCol,
@@ -259,14 +260,16 @@ function parseFilters(req, options = {}) {
 /**
  * Build SQL filter for category path
  */
-function buildCategoryPathSQL(startParamIndex, prefix = 'b.') {
+ function buildCategoryPathSQL(startParamIndex, domain = 'product', prefix = 'b.') {
+  const cols = CAT_COLS[domain] || CAT_COLS.product;
   return `
-    AND ($${startParamIndex}::text IS NULL OR ${prefix}category_l1 = $${startParamIndex})
-    AND ($${startParamIndex + 1}::text IS NULL OR ${prefix}category_l2 = $${startParamIndex + 1})
-    AND ($${startParamIndex + 2}::text IS NULL OR ${prefix}category_l3 = $${startParamIndex + 2})
-    AND ($${startParamIndex + 3}::text IS NULL OR ${prefix}category_l4 = $${startParamIndex + 3})
+    AND ($${startParamIndex}::text IS NULL OR ${prefix}${cols.l1} = $${startParamIndex})
+    AND ($${startParamIndex + 1}::text IS NULL OR ${prefix}${cols.l2} = $${startParamIndex + 1})
+    AND ($${startParamIndex + 2}::text IS NULL OR ${prefix}${cols.l3} = $${startParamIndex + 2})
+    AND ($${startParamIndex + 3}::text IS NULL OR ${prefix}${cols.l4} = $${startParamIndex + 3})
   `;
 }
+
 
 /**
  * Build filter response object
@@ -283,7 +286,7 @@ function buildFilterResponse(filters, module) {
         k_threshold: filters.applied.k_threshold,
         category_level: filters.applied.category_level,
         peer_scope: filters.applied.peer_scope,
-        product_path: filters.applied.product_path,
+        category_path: filters.applied.product_path,
         category_value: filters.applied.category_value
       },
       grouping: {
@@ -477,18 +480,19 @@ app.get('/api/categories/children', asyncHandler(async (req, res) => {
   const params = [start, end, reconcile_ok];
   let paramIndex = 4;
 
-  if (product_path.l1) {
-    parentFilters += ` AND b.category_l1 = $${paramIndex}`;
+const pathCols = CAT_COLS[domain] || CAT_COLS.product;
+if (product_path.l1) {
+  parentFilters += ` AND b.${pathCols.l1} = $${paramIndex}`;
     params.push(product_path.l1);
     paramIndex++;
   }
-  if (product_path.l2) {
-    parentFilters += ` AND b.category_l2 = $${paramIndex}`;
+if (product_path.l2) {
+  parentFilters += ` AND b.${pathCols.l2} = $${paramIndex}`;
     params.push(product_path.l2);
     paramIndex++;
   }
-  if (product_path.l3) {
-    parentFilters += ` AND b.category_l3 = $${paramIndex}`;
+if (product_path.l3) {
+  parentFilters += ` AND b.${pathCols.l3} = $${paramIndex}`;
     params.push(product_path.l3);
     paramIndex++;
   }
@@ -552,7 +556,7 @@ app.get('/api/kpis/summary', asyncHandler(async (req, res) => {
   prevStart.setDate(prevStart.getDate() - daysDiff);
   const prevStartStr = prevStart.toISOString().split('T')[0];
 
-  const categoryPathFilter = buildCategoryPathSQL(5);
+  const categoryPathFilter = buildCategoryPathSQL(5, filters.applied.category_domain);
   const categoryParams = [start, end, reconcile_ok, issuer_ruc, product_path.l1, product_path.l2, product_path.l3, product_path.l4];
 
   const kpisQuery = `
@@ -698,30 +702,44 @@ app.get('/api/sow_leakage/by_category', asyncHandler(async (req, res) => {
     peerScopeWhere = `AND (b.issuer_ruc = $4 OR di_b.issuer_l1 = di_x.issuer_l1)`;
   }
 
-  const categoryPathFilter = buildCategoryPathSQL(6);
+  const categoryPathFilter = buildCategoryPathSQL(6, filters.applied.category_domain);
 
   const query = `
-    WITH cohort AS (
-      SELECT DISTINCT b.user_id FROM analytics.radiance_base_v1 b
-      LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
-      WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
-        AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
-        AND b.issuer_ruc = $4 AND b.user_id IS NOT NULL ${categoryPathFilter}
-    ),
-    peer_spend AS (
-      SELECT b.user_id, COALESCE(b.${group_by_col}, 'UNKNOWN') AS category_value, b.issuer_ruc, SUM(COALESCE(b.line_total, 0)) AS spend
-      FROM analytics.radiance_base_v1 b INNER JOIN cohort c ON b.user_id = c.user_id
-      LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe ${peerScopeJoin}
-      WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
-        AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3) ${peerScopeWhere} ${categoryPathFilter}
-      GROUP BY b.user_id, COALESCE(b.${group_by_col}, 'UNKNOWN'), b.issuer_ruc
-    )
-    SELECT category_value, COUNT(DISTINCT user_id) AS users,
-      SUM(CASE WHEN issuer_ruc = $4 THEN spend ELSE 0 END) AS spend_in_x_usd, SUM(spend) AS spend_market_usd,
-      SUM(spend) - SUM(CASE WHEN issuer_ruc = $4 THEN spend ELSE 0 END) AS leakage_usd,
-      ROUND(100.0 * SUM(CASE WHEN issuer_ruc = $4 THEN spend ELSE 0 END) / NULLIF(SUM(spend), 0), 2) AS sow_pct
-    FROM peer_spend GROUP BY category_value HAVING COUNT(DISTINCT user_id) >= $5 ORDER BY spend_in_x_usd DESC
-  `;
+ WITH cohort AS (
+  SELECT DISTINCT b.user_id FROM analytics.radiance_base_v1 b
+  LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
+  WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
+    AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
+    AND b.issuer_ruc = $4 AND b.user_id IS NOT NULL ${categoryPathFilter}
+),
+peer_spend AS (
+  SELECT b.user_id, COALESCE(b.${group_by_col}, 'UNKNOWN') AS category_value, b.issuer_ruc, SUM(COALESCE(b.line_total, 0)) AS spend
+  FROM analytics.radiance_base_v1 b INNER JOIN cohort c ON b.user_id = c.user_id
+  LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe ${peerScopeJoin}
+  WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
+    AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3) ${peerScopeWhere} ${categoryPathFilter}
+  GROUP BY b.user_id, COALESCE(b.${group_by_col}, 'UNKNOWN'), b.issuer_ruc
+),
+grouped AS (
+  SELECT category_value, 
+    COUNT(DISTINCT user_id) AS users,
+    SUM(CASE WHEN issuer_ruc = $4 THEN spend ELSE 0 END) AS spend_in_x_usd, 
+    SUM(spend) AS spend_market_usd,
+    SUM(spend) - SUM(CASE WHEN issuer_ruc = $4 THEN spend ELSE 0 END) AS leakage_usd,
+    ROUND(100.0 * SUM(CASE WHEN issuer_ruc = $4 THEN spend ELSE 0 END) / NULLIF(SUM(spend), 0), 2) AS sow_pct
+  FROM peer_spend GROUP BY category_value
+)
+SELECT 
+  CASE WHEN users < $5 THEN 'OTHER_SUPPRESSED' ELSE category_value END AS category_value,
+  SUM(users) AS users, 
+  SUM(spend_in_x_usd) AS spend_in_x_usd,
+  SUM(spend_market_usd) AS spend_market_usd,
+  SUM(leakage_usd) AS leakage_usd,
+  ROUND(100.0 * SUM(spend_in_x_usd) / NULLIF(SUM(spend_market_usd), 0), 2) AS sow_pct
+FROM grouped
+GROUP BY CASE WHEN users < $5 THEN 'OTHER_SUPPRESSED' ELSE category_value END
+ORDER BY SUM(spend_in_x_usd) DESC
+`;
 
   const { rows } = await pool.query(query, [start, end, reconcile_ok, issuer_ruc, k_threshold, product_path.l1, product_path.l2, product_path.l3, product_path.l4]);
 
@@ -752,7 +770,7 @@ app.get('/api/switching/destinations', asyncHandler(async (req, res) => {
 
   const { start, end, issuer_ruc, reconcile_ok, k_threshold, product_path } = filters.applied;
   const timerStart = Date.now();
-  const categoryPathFilter = buildCategoryPathSQL(6);
+  const categoryPathFilter = buildCategoryPathSQL(6, filters.applied.category_domain);
 
   const query = `
     WITH cohort AS (
@@ -768,7 +786,16 @@ app.get('/api/switching/destinations', asyncHandler(async (req, res) => {
     )
     SELECT destination, COUNT(DISTINCT user_id) AS users,
       ROUND(100.0 * COUNT(DISTINCT user_id) / NULLIF((SELECT COUNT(*) FROM cohort), 0), 2) AS pct
-    FROM elsewhere GROUP BY destination HAVING COUNT(DISTINCT user_id) >= $5 ORDER BY users DESC LIMIT 15
+    , grouped AS (
+  SELECT destination, COUNT(DISTINCT user_id) AS users, ...
+  FROM elsewhere GROUP BY destination
+)
+SELECT 
+  CASE WHEN users < $5 THEN 'OTHER_SUPPRESSED' ELSE destination END AS destination,
+  SUM(users) AS users, ...
+FROM grouped
+GROUP BY CASE WHEN users < $5 THEN 'OTHER_SUPPRESSED' ELSE destination END
+ORDER BY users DESC LIMIT 25
   `;
 
   const { rows } = await pool.query(query, [start, end, reconcile_ok, issuer_ruc, k_threshold, product_path.l1, product_path.l2, product_path.l3, product_path.l4]);
@@ -859,25 +886,33 @@ app.get('/api/basket/breadth', asyncHandler(async (req, res) => {
   const { start, end, issuer_ruc, reconcile_ok, k_threshold, product_path } = filters.applied;
   const { cat_col } = filters.derived;
   const timerStart = Date.now();
-  const categoryPathFilter = buildCategoryPathSQL(6);
+  const categoryPathFilter = buildCategoryPathSQL(6, filters.applied.category_domain);
 
   const query = `
-    WITH base_txn AS (
-      SELECT b.user_id, DATE_TRUNC('month', b.invoice_date)::date AS txn_month, b.issuer_ruc, COALESCE(b.${cat_col}, 'UNKNOWN') AS cat_val
-      FROM analytics.radiance_base_v1 b LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
-      WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
-        AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3) AND b.user_id IS NOT NULL ${categoryPathFilter}
-    ),
-    cohort AS (SELECT DISTINCT user_id, txn_month FROM base_txn WHERE issuer_ruc = $4),
-    user_breadth AS (
-      SELECT c.user_id, c.txn_month, COUNT(DISTINCT bt.cat_val) AS breadth_total,
-        COUNT(DISTINCT CASE WHEN bt.issuer_ruc = $4 THEN bt.cat_val END) AS breadth_in_x
-      FROM cohort c INNER JOIN base_txn bt ON c.user_id = bt.user_id AND c.txn_month = bt.txn_month GROUP BY c.user_id, c.txn_month
-    )
-    SELECT txn_month AS origin_month, COUNT(DISTINCT user_id) AS users,
-      ROUND(AVG(breadth_total), 2) AS avg_breadth_market, ROUND(AVG(breadth_in_x), 2) AS avg_breadth_in_x
-    FROM user_breadth GROUP BY txn_month HAVING COUNT(DISTINCT user_id) >= $5 ORDER BY txn_month
-  `;
+  WITH base_txn AS (
+  SELECT b.user_id, DATE_TRUNC('month', b.invoice_date)::date AS txn_month, b.issuer_ruc, COALESCE(b.${cat_col}, 'UNKNOWN') AS cat_val
+  FROM analytics.radiance_base_v1 b LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
+  WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
+    AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3) AND b.user_id IS NOT NULL ${categoryPathFilter}
+),
+cohort AS (SELECT DISTINCT user_id, txn_month FROM base_txn WHERE issuer_ruc = $4),
+user_breadth AS (
+  SELECT c.user_id, c.txn_month, COUNT(DISTINCT bt.cat_val) AS breadth_total,
+    COUNT(DISTINCT CASE WHEN bt.issuer_ruc = $4 THEN bt.cat_val END) AS breadth_in_x
+  FROM cohort c INNER JOIN base_txn bt ON c.user_id = bt.user_id AND c.txn_month = bt.txn_month GROUP BY c.user_id, c.txn_month
+),
+monthly AS (
+  SELECT txn_month AS origin_month, 
+    COUNT(DISTINCT user_id) AS users,
+    ROUND(AVG(breadth_total), 2) AS avg_breadth_market, 
+    ROUND(AVG(breadth_in_x), 2) AS avg_breadth_in_x
+  FROM user_breadth GROUP BY txn_month
+)
+SELECT origin_month, users, avg_breadth_market, avg_breadth_in_x,
+  CASE WHEN users < $5 THEN true ELSE false END AS is_suppressed
+FROM monthly
+ORDER BY origin_month 
+`;
 
   const { rows } = await pool.query(query, [start, end, reconcile_ok, issuer_ruc, k_threshold, product_path.l1, product_path.l2, product_path.l3, product_path.l4]);
 
@@ -908,44 +943,57 @@ app.get('/api/loyalty/brands', asyncHandler(async (req, res) => {
 
   const query = `
     WITH base AS (
-      SELECT b.user_id, COALESCE(NULLIF(TRIM(b.product_brand), ''), 'UNKNOWN') AS brand, SUM(COALESCE(b.line_total, 0)) AS brand_spend
-      FROM analytics.radiance_base_v1 b LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
-      WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
-        AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
-        AND b.issuer_ruc = $4 AND b.user_id IS NOT NULL AND COALESCE(b.${cat_col}, 'UNKNOWN') = $5
-      GROUP BY b.user_id, COALESCE(NULLIF(TRIM(b.product_brand), ''), 'UNKNOWN')
-    ),
-    user_cat_spend AS (SELECT user_id, SUM(brand_spend) AS cat_spend FROM base GROUP BY user_id),
-    shares AS (
-      SELECT b.user_id, b.brand, ROUND(100.0 * b.brand_spend / NULLIF(u.cat_spend, 0), 2) AS share_pct
-      FROM base b JOIN user_cat_spend u ON b.user_id = u.user_id WHERE b.brand_spend > 0
-    ),
-    brand_agg AS (
-      SELECT brand, COUNT(DISTINCT user_id) AS brand_buyers,
-        ROUND(100.0 * COUNT(DISTINCT user_id) / NULLIF((SELECT COUNT(*) FROM user_cat_spend), 0), 2) AS penetration_pct,
-        ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY share_pct)::numeric, 2) AS p75,
-        COUNT(DISTINCT user_id) FILTER (WHERE share_pct >= 80) AS loyal_users
-      FROM shares GROUP BY brand
-    ),
-    tiers AS (
-      SELECT COUNT(*) FILTER (WHERE share_pct >= 95) AS exclusive, COUNT(*) FILTER (WHERE share_pct >= 80 AND share_pct < 95) AS loyal,
-        COUNT(*) FILTER (WHERE share_pct >= 50 AND share_pct < 80) AS prefer, COUNT(*) FILTER (WHERE share_pct < 50) AS light
-      FROM shares
-    ),
-    dist AS (
-      SELECT ROUND(PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY share_pct)::numeric, 2) AS p10,
-        ROUND(PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY share_pct)::numeric, 2) AS p25,
-        ROUND(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY share_pct)::numeric, 2) AS p50,
-        ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY share_pct)::numeric, 2) AS p75,
-        ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY share_pct)::numeric, 2) AS p90
-      FROM shares
-    )
-    SELECT brand, brand_buyers, penetration_pct, p75, loyal_users,
-      ROUND(100.0 * loyal_users / NULLIF(brand_buyers, 0), 2) AS loyalty_rate_pct,
-      (SELECT row_to_json(tiers.*) FROM tiers) AS tiers_json, (SELECT row_to_json(dist.*) FROM dist) AS dist_json
-    FROM brand_agg WHERE brand_buyers >= $6 OR brand = 'UNKNOWN'
-    ORDER BY CASE brand WHEN 'UNKNOWN' THEN 2 ELSE 1 END, brand_buyers DESC
-  `;
+  SELECT b.user_id, COALESCE(NULLIF(TRIM(b.product_brand), ''), 'UNKNOWN') AS brand, SUM(COALESCE(b.line_total, 0)) AS brand_spend
+  FROM analytics.radiance_base_v1 b LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
+  WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
+    AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3)
+    AND b.issuer_ruc = $4 AND b.user_id IS NOT NULL AND COALESCE(b.${cat_col}, 'UNKNOWN') = $5
+  GROUP BY b.user_id, COALESCE(NULLIF(TRIM(b.product_brand), ''), 'UNKNOWN')
+),
+user_cat_spend AS (SELECT user_id, SUM(brand_spend) AS cat_spend FROM base GROUP BY user_id),
+shares AS (
+  SELECT b.user_id, b.brand, ROUND(100.0 * b.brand_spend / NULLIF(u.cat_spend, 0), 2) AS share_pct
+  FROM base b JOIN user_cat_spend u ON b.user_id = u.user_id WHERE b.brand_spend > 0
+),
+brand_agg AS (
+  SELECT brand, COUNT(DISTINCT user_id) AS brand_buyers,
+    ROUND(100.0 * COUNT(DISTINCT user_id) / NULLIF((SELECT COUNT(*) FROM user_cat_spend), 0), 2) AS penetration_pct,
+    ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY share_pct)::numeric, 2) AS p75,
+    COUNT(DISTINCT user_id) FILTER (WHERE share_pct >= 80) AS loyal_users
+  FROM shares GROUP BY brand
+),
+tiers AS (
+  SELECT COUNT(*) FILTER (WHERE share_pct >= 95) AS exclusive, 
+    COUNT(*) FILTER (WHERE share_pct >= 80 AND share_pct < 95) AS loyal,
+    COUNT(*) FILTER (WHERE share_pct >= 50 AND share_pct < 80) AS prefer, 
+    COUNT(*) FILTER (WHERE share_pct < 50) AS light
+  FROM shares
+),
+dist AS (
+  SELECT ROUND(PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY share_pct)::numeric, 2) AS p10,
+    ROUND(PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY share_pct)::numeric, 2) AS p25,
+    ROUND(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY share_pct)::numeric, 2) AS p50,
+    ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY share_pct)::numeric, 2) AS p75,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY share_pct)::numeric, 2) AS p90
+  FROM shares
+),
+brand_final AS (
+  SELECT 
+    CASE WHEN brand_buyers < $6 AND brand != 'UNKNOWN' THEN 'OTHER_SUPPRESSED' ELSE brand END AS brand,
+    SUM(brand_buyers) AS brand_buyers,
+    ROUND(AVG(penetration_pct), 2) AS penetration_pct,
+    ROUND(AVG(p75), 2) AS p75,
+    SUM(loyal_users) AS loyal_users
+  FROM brand_agg
+  GROUP BY CASE WHEN brand_buyers < $6 AND brand != 'UNKNOWN' THEN 'OTHER_SUPPRESSED' ELSE brand END
+)
+SELECT brand, brand_buyers, penetration_pct, p75, loyal_users,
+  ROUND(100.0 * loyal_users / NULLIF(brand_buyers, 0), 2) AS loyalty_rate_pct,
+  (SELECT row_to_json(tiers.*) FROM tiers) AS tiers_json, 
+  (SELECT row_to_json(dist.*) FROM dist) AS dist_json
+FROM brand_final
+ORDER BY CASE brand WHEN 'UNKNOWN' THEN 2 WHEN 'OTHER_SUPPRESSED' THEN 3 ELSE 1 END, brand_buyers DESC
+`;
 
   const { rows } = await pool.query(query, [start, end, reconcile_ok, issuer_ruc, category_value, k_threshold]);
   const first = rows[0] || {};
@@ -976,7 +1024,7 @@ app.get('/api/panel/summary', asyncHandler(async (req, res) => {
 
   const { start, end, issuer_ruc, reconcile_ok, product_path } = filters.applied;
   const timerStart = Date.now();
-  const categoryPathFilter = buildCategoryPathSQL(5);
+  const categoryPathFilter = buildCategoryPathSQL(5, filters.applied.category_domain);
 
   const query = `
     WITH base_txn AS (
