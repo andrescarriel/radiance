@@ -460,7 +460,7 @@ app.get('/api/categories', asyncHandler(async (req, res) => {
 // CATEGORIES CHILDREN
 // =============================================================================
 app.get('/api/categories/children', asyncHandler(async (req, res) => {
-  const filters = parseFilters(req, { requireIssuer: false, requireDates: true, supportsCategoryPath: true });
+  const filters = parseFilters(req, { requireIssuer: false, requireDates: true, supportsCategoryPath: true, supportsPeerScope: true });
   
   if (!filters.isValid) {
     return res.status(400).json({ error: filters.invalid.map(i => i.reason).join('; ') });
@@ -812,7 +812,7 @@ ORDER BY SUM(users) DESC LIMIT 25
 // SPRINT 3: LEAKAGE TREE
 // =============================================================================
 app.get('/api/leakage/tree', asyncHandler(async (req, res) => {
-  const filters = parseFilters(req, { requireIssuer: true, requireDates: true, requireCategoryValue: true, supportsCategoryPath: false });
+  const filters = parseFilters(req, { requireIssuer: true, requireDates: true, requireCategoryValue: true, supportsCategoryPath: true, supportsPeerScope: true });
   
   if (!filters.isValid) {
     return res.status(400).json({ error: filters.invalid.map(i => i.reason).join('; ') });
@@ -877,7 +877,7 @@ app.get('/api/leakage/tree', asyncHandler(async (req, res) => {
 // SPRINT 4: BASKET BREADTH
 // =============================================================================
 app.get('/api/basket/breadth', asyncHandler(async (req, res) => {
-  const filters = parseFilters(req, { requireIssuer: true, requireDates: true, supportsCategoryPath: true });
+  const filters = parseFilters(req, { requireIssuer: true, requireDates: true, supportsCategoryPath: true, supportsPeerScope: true });
   
   if (!filters.isValid) {
     return res.status(400).json({ error: filters.invalid.map(i => i.reason).join('; ') });
@@ -888,14 +888,21 @@ app.get('/api/basket/breadth', asyncHandler(async (req, res) => {
   const timerStart = Date.now();
   const categoryPathFilter = buildCategoryPathSQL(6, filters.applied.category_domain);
 
-  const query = `
-  WITH base_txn AS (
+const query = `
+  WITH cohort_base AS (
+  SELECT b.user_id, DATE_TRUNC('month', b.invoice_date)::date AS txn_month
+  FROM analytics.radiance_base_v1 b LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
+  WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
+    AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3) 
+    AND b.issuer_ruc = $4 AND b.user_id IS NOT NULL ${categoryPathFilter}
+),
+cohort AS (SELECT DISTINCT user_id, txn_month FROM cohort_base),
+base_txn AS (
   SELECT b.user_id, DATE_TRUNC('month', b.invoice_date)::date AS txn_month, b.issuer_ruc, COALESCE(b.${cat_col}, 'UNKNOWN') AS cat_val
   FROM analytics.radiance_base_v1 b LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
   WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
-    AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3) AND b.user_id IS NOT NULL ${categoryPathFilter}
+    AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3) AND b.user_id IS NOT NULL
 ),
-cohort AS (SELECT DISTINCT user_id, txn_month FROM base_txn WHERE issuer_ruc = $4),
 user_breadth AS (
   SELECT c.user_id, c.txn_month, COUNT(DISTINCT bt.cat_val) AS breadth_total,
     COUNT(DISTINCT CASE WHEN bt.issuer_ruc = $4 THEN bt.cat_val END) AS breadth_in_x
@@ -931,7 +938,7 @@ ORDER BY origin_month
 // SPRINT 5: BRAND LOYALTY
 // =============================================================================
 app.get('/api/loyalty/brands', asyncHandler(async (req, res) => {
-  const filters = parseFilters(req, { requireIssuer: true, requireDates: true, requireCategoryValue: true, supportsCategoryPath: false });
+  const filters = parseFilters(req, { requireIssuer: true, requireDates: true, requireCategoryValue: true, supportsCategoryPath: false, supportsPeerScope: true });
   
   if (!filters.isValid) {
     return res.status(400).json({ error: filters.invalid.map(i => i.reason).join('; ') });
@@ -1016,7 +1023,7 @@ ORDER BY CASE brand WHEN 'UNKNOWN' THEN 2 WHEN 'OTHER_SUPPRESSED' THEN 3 ELSE 1 
 // SPRINT 6: PANEL SUMMARY
 // =============================================================================
 app.get('/api/panel/summary', asyncHandler(async (req, res) => {
-  const filters = parseFilters(req, { requireIssuer: true, requireDates: true, supportsCategoryPath: true });
+  const filters = parseFilters(req, { requireIssuer: true, requireDates: true, supportsCategoryPath: true, supportsPeerScope: true });
   
   if (!filters.isValid) {
     return res.status(400).json({ error: filters.invalid.map(i => i.reason).join('; ') });
