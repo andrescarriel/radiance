@@ -783,19 +783,19 @@ app.get('/api/switching/destinations', asyncHandler(async (req, res) => {
       LEFT JOIN analytics.radiance_invoice_reconcile_v1 r ON b.cufe = r.cufe
       WHERE b.invoice_date >= $1::date AND b.invoice_date < $2::date
         AND ($3::boolean IS NULL OR COALESCE(r.reconcile_ok, false) = $3) AND b.issuer_ruc != $4 ${categoryPathFilter}
-    )
-    SELECT destination, COUNT(DISTINCT user_id) AS users,
-      ROUND(100.0 * COUNT(DISTINCT user_id) / NULLIF((SELECT COUNT(*) FROM cohort), 0), 2) AS pct
-    , grouped AS (
-  SELECT destination, COUNT(DISTINCT user_id) AS users, ...
+    ),
+	grouped AS (
+  SELECT destination, COUNT(DISTINCT user_id) AS users,
+    ROUND(100.0 * COUNT(DISTINCT user_id) / NULLIF((SELECT COUNT(*) FROM cohort), 0), 2) AS pct
   FROM elsewhere GROUP BY destination
 )
 SELECT 
   CASE WHEN users < $5 THEN 'OTHER_SUPPRESSED' ELSE destination END AS destination,
-  SUM(users) AS users, ...
+  SUM(users) AS users,
+  ROUND(100.0 * SUM(users) / NULLIF((SELECT COUNT(*) FROM cohort), 0), 2) AS pct
 FROM grouped
 GROUP BY CASE WHEN users < $5 THEN 'OTHER_SUPPRESSED' ELSE destination END
-ORDER BY users DESC LIMIT 25
+ORDER BY SUM(users) DESC LIMIT 25
   `;
 
   const { rows } = await pool.query(query, [start, end, reconcile_ok, issuer_ruc, k_threshold, product_path.l1, product_path.l2, product_path.l3, product_path.l4]);
