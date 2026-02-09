@@ -774,7 +774,7 @@ app.get('/api/switching/destinations', asyncHandler(async (req, res) => {
 
   const query = `
     WITH cohort AS (
-      SELECT DISTINCT user_id FROM analytics.radiance_base_v1
+      SELECT DISTINCT user_id FROM analytics.radiance_base_v1 b
       WHERE invoice_date >= $1::date AND invoice_date < $2::date AND issuer_ruc = $4 AND user_id IS NOT NULL ${categoryPathFilter}
     ),
     elsewhere AS (
