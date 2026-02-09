@@ -224,7 +224,7 @@ function processFilterEcho(backendFilters) {
 // HIERARCHICAL CATEGORY DROPDOWNS
 // -----------------------------------------------------------------------------
 async function fetchCategoryChildren(level, parentPath) {
-  const cacheKey = `${level}:${JSON.stringify(parentPath)}`;
+  const cacheKey = `${globalFilters.category_domain}|${globalFilters.issuer_ruc || ''}|${globalFilters.start}|${globalFilters.end}|${level}|${JSON.stringify(parentPath)}`;
   
   if (childrenCache[cacheKey]) {
     return childrenCache[cacheKey];
@@ -234,7 +234,7 @@ async function fetchCategoryChildren(level, parentPath) {
     start: globalFilters.start,
     end: globalFilters.end,
     level: level,
-    domain: globalFilters.category_domain
+    category_domain: globalFilters.category_domain
   };
   
   // Add parent path
